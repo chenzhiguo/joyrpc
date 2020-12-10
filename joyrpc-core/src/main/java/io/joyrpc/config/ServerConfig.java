@@ -287,7 +287,7 @@ public class ServerConfig extends AbstractIdConfig implements Serializable {
         } else if (!host.equals(other.host)) {
             return false;
         }
-        if (port != other.port) {
+        if (port.equals(other.port)) {
             return false;
         }
         return true;

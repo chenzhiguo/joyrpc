@@ -27,7 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /**
- * Protostuf读入器
+ * Protostuff读入器
  */
 public class AbstractProtostuffReader implements ObjectReader {
     /**

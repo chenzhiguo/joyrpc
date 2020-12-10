@@ -116,7 +116,7 @@ public class McTPWindow implements TPWindow {
     @Override
     public void success(final int timeMillis, final int records, final long dataSize) {
         histogram.success(timeMillis, records, dataSize);
-        successiveFailures.set(0);
+        resetSuccessiveFailures();
     }
 
     @Override
@@ -170,7 +170,7 @@ public class McTPWindow implements TPWindow {
     @Override
     public void weak(final MilliPeriod period, final long duration) {
         if (weakPeriod != period) {
-            //放置并发
+            //防止并发
             return;
         }
         MilliPeriod mp = this.weakPeriod;

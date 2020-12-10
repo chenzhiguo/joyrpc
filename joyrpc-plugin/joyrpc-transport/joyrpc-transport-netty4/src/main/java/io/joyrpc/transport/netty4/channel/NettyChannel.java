@@ -36,6 +36,7 @@ import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -94,6 +95,7 @@ public class NettyChannel implements Channel {
             }
         } else if (consumer != null) {
             try {
+
                 channel.writeAndFlush(object).addListener((future) -> {
                     if (future.isSuccess()) {
                         consumer.accept(new SendResult(true, this, object));
@@ -163,12 +165,14 @@ public class NettyChannel implements Channel {
 
     @Override
     public InetSocketAddress getLocalAddress() {
-        return (InetSocketAddress) channel.localAddress();
+        // return (InetSocketAddress) channel.localAddress();
+        return null;
     }
 
     @Override
     public InetSocketAddress getRemoteAddress() {
-        return (InetSocketAddress) channel.remoteAddress();
+        // return (InetSocketAddress) channel.remoteAddress();
+        return null;
     }
 
     @Override

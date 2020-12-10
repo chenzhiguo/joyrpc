@@ -84,6 +84,7 @@ public class NacosRegistry extends AbstractRegistry {
      * @param url url
      * @return 标准化后的URL
      */
+    @Override
     public URL normalize(URL url) {
         URL resUrl = super.normalize(url);
         String tagKey = url.getString(TAG_KEY_OPTION);

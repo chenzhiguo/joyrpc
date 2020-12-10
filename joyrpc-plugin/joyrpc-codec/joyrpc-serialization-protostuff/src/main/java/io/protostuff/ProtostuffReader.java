@@ -23,7 +23,7 @@ package io.protostuff;
 import java.io.InputStream;
 
 /**
- * Protostuf读入器
+ * Protostuff读入器
  */
 public class ProtostuffReader extends AbstractProtostuffReader {
 

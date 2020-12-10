@@ -90,7 +90,7 @@
         <commons-compress.version>1.20</commons-compress.version>
         <byte-buddy.version>1.10.17</byte-buddy.version>
         <grpc.version>1.20.0</grpc.version>
-        <netty.version>4.1.53.Final</netty.version>
+        <netty.version>4.1.55.Final</netty.version>
         <hazelcast.version>3.12.5</hazelcast.version>
         <curator.version>4.3.0</curator.version>
         <zookeeper.version>3.5.7</zookeeper.version>

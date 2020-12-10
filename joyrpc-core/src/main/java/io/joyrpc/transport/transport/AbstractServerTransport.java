@@ -41,6 +41,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -238,7 +239,7 @@ public abstract class AbstractServerTransport implements ServerTransport {
                         }
                     } else {
                         //失败
-                        logger.error(String.format("Failed binding server to %s:%d", host, url.getPort()));
+                        logger.error(String.format("Failed binding server to %s:%d", host, url.getPort()), r.getThrowable());
                         consumer.accept(new AsyncResult<>(
                                 !STATE_UPDATER.compareAndSet(this, OPENING, CLOSED) ?
                                         new ConnectionException("state is illegal.") :

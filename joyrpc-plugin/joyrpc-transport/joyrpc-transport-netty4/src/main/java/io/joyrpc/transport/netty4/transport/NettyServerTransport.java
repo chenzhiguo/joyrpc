@@ -35,16 +35,27 @@ import io.joyrpc.transport.netty4.ssl.SslContextManager;
 import io.joyrpc.transport.transport.AbstractServerTransport;
 import io.joyrpc.transport.transport.ChannelTransport;
 import io.joyrpc.transport.transport.ServerTransport;
+import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
+import io.netty.incubator.codec.quic.InsecureQuicTokenHandler;
+import io.netty.incubator.codec.quic.Quic;
+import io.netty.incubator.codec.quic.QuicChannel;
+import io.netty.incubator.codec.quic.QuicServerCodecBuilder;
+import io.netty.util.CharsetUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -60,6 +71,8 @@ public class NettyServerTransport extends AbstractServerTransport {
     protected final BiFunction<Channel, URL, ChannelTransport> function;
 
     protected final Supplier<List<Channel>> supplier = this::getChannels;
+
+    private static final Logger logger = LoggerFactory.getLogger(NettyServerTransport.class);
 
     /**
      * 构造函数
@@ -101,20 +114,105 @@ public class NettyServerTransport extends AbstractServerTransport {
                 SslContext sslContext = SslContextManager.getServerSslContext(url);
                 EventLoopGroup bossGroup = EventLoopGroupFactory.getBossGroup(url);
                 EventLoopGroup workerGroup = EventLoopGroupFactory.getWorkerGroup(url);
-                ServerBootstrap bootstrap = configure(new ServerBootstrap().group(bossGroup, workerGroup), sslContext);
-                bootstrap.bind(new InetSocketAddress(host, port)).addListener((ChannelFutureListener) f -> {
-                    NettyServerChannel channel = new NettyServerChannel(f.channel(), bossGroup, workerGroup, supplier);
-                    if (f.isSuccess()) {
-                        consumer.accept(new AsyncResult<>(channel));
-                    } else {
-                        //自动解绑
-                        Throwable error = f.cause();
-                        channel.close(o -> consumer.accept(new AsyncResult<>(
-                                new ConnectionException(
-                                        String.format("Failed binding server at %s:%d, caused by %s",
-                                                host, port, error.getMessage()), error))));
-                    }
-                });
+                // if (url.getBoolean("quic")) {
+                if (true) {
+                    byte[] proto = new byte[] {
+                            0x05, 'h', 'q', '-', '2', '9',
+                            0x05, 'h', 'q', '-', '2', '8',
+                            0x05, 'h', 'q', '-', '2', '7',
+                            0x08, 'h', 't', 't', 'p', '/', '0', '.', '9'
+                    };
+                    ChannelHandler channelHandler = new QuicServerCodecBuilder()
+                            .certificateChain("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.crt")
+                            .privateKey("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.key")
+                            .applicationProtocols(proto)
+                            .maxIdleTimeout(5000, TimeUnit.MILLISECONDS)
+                            // .maxUdpPayloadSize(Quic.MAX_DATAGRAM_SIZE)
+                            .initialMaxData(10000000)
+                            .initialMaxStreamDataBidirectionalLocal(1000000)
+                            .initialMaxStreamDataBidirectionalRemote(1000000)
+                            .initialMaxStreamsBidirectional(100)
+                            .initialMaxStreamsUnidirectional(100)
+                            .tokenHandler(InsecureQuicTokenHandler.INSTANCE)
+                            // ChannelHandler that is added into QuicChannel pipeline.
+                            .handler(new ChannelInboundHandlerAdapter() {
+                                @Override
+                                public void channelActive(ChannelHandlerContext ctx) {
+                                    QuicChannel channel = (QuicChannel) ctx.channel();
+                                    // Create streams etc..
+                                }
+
+                                @Override
+                                public void channelInactive(ChannelHandlerContext ctx) {
+                                    // log.info("Connection closed: {}",
+                                    //         ((QuicChannel) ctx.channel()).collectStats().getNow());
+                                }
+
+                                @Override
+                                public boolean isSharable() {
+                                    return true;
+                                }
+                            })
+                            .streamHandler(new ChannelInboundHandlerAdapter() {
+                                @Override
+                                public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                    ByteBuf byteBuf = (ByteBuf) msg;
+                                    try {
+                                        if (byteBuf.toString(CharsetUtil.US_ASCII).trim().equals("GET /")) {
+                                            ByteBuf buffer = ctx.alloc().directBuffer();
+                                            buffer.writeCharSequence("Hello World!\r\n", CharsetUtil.US_ASCII);
+
+                                            // Write the buffer and close the stream once the write completes.
+                                            ctx.writeAndFlush(buffer).addListener(ChannelFutureListener.CLOSE);
+                                        }
+                                    } finally {
+                                        byteBuf.release();
+                                    }
+                                }
+
+                                @Override
+                                public boolean isSharable() {
+                                    return true;
+                                }
+                            })
+                            .build();
+                    Bootstrap bootstrap = new Bootstrap();
+                    // io.netty.channel.Channel channel1 =
+                            bootstrap.group(bossGroup).channel(NioDatagramChannel.class).handler(channelHandler)
+                            .bind(new InetSocketAddress(port))
+                                    .addListener((ChannelFutureListener) f -> {
+                                NettyServerChannel channel = new NettyServerChannel(f.channel(), bossGroup, workerGroup, supplier);
+                                if (f.isSuccess()) {
+                                    consumer.accept(new AsyncResult<>(channel));
+                                } else {
+                                    //自动解绑
+                                    logger.error("Error:", f.cause());
+                                    Throwable error = f.cause();
+                                    channel.close(o -> consumer.accept(new AsyncResult<>(
+                                            new ConnectionException(
+                                                    String.format("Failed binding server at %s:%d, caused by %s",
+                                                            host, port, error.getMessage()), error))));
+
+                                }
+                            }
+                    ).sync().channel();
+                    // channel1.closeFuture().sync();
+                } else {
+                    ServerBootstrap bootstrap = configure(new ServerBootstrap().group(bossGroup, workerGroup), sslContext);
+                    bootstrap.bind(new InetSocketAddress(host, port)).addListener((ChannelFutureListener) f -> {
+                        NettyServerChannel channel = new NettyServerChannel(f.channel(), bossGroup, workerGroup, supplier);
+                        if (f.isSuccess()) {
+                            consumer.accept(new AsyncResult<>(channel));
+                        } else {
+                            //自动解绑
+                            Throwable error = f.cause();
+                            channel.close(o -> consumer.accept(new AsyncResult<>(
+                                    new ConnectionException(
+                                            String.format("Failed binding server at %s:%d, caused by %s",
+                                                    host, port, error.getMessage()), error))));
+                        }
+                    });
+                }
             } catch (Throwable e) {
                 consumer.accept(new AsyncResult<>(e));
             }

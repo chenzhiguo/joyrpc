@@ -29,6 +29,7 @@ import io.joyrpc.transport.session.SessionManager;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -60,8 +61,8 @@ public interface Channel {
      * @return
      */
     static String toString(Channel channel) {
-        return toString(channel.getLocalAddress()) + " -> " + toString(channel.getRemoteAddress());
-
+        // return toString(channel.getLocalAddress()) + " -> " + toString(channel.getRemoteAddress());
+        return "";
     }
 
     /**
@@ -70,13 +71,17 @@ public interface Channel {
      * @param address InetSocketAddress转
      * @return host:port 字符串
      */
-    static String toString(final InetSocketAddress address) {
+    static String toString(final SocketAddress address) {
         if (address == null) {
             return "";
         } else {
-            InetAddress inetAddress = address.getAddress();
-            return inetAddress == null ? address.getHostName() :
-                    inetAddress.getHostAddress() + ":" + address.getPort();
+            if (address instanceof InetSocketAddress) {
+                InetAddress inetAddress = ((InetSocketAddress)address).getAddress();
+                return inetAddress == null ? ((InetSocketAddress)address).getHostName() :
+                        inetAddress.getHostAddress() + ":" + ((InetSocketAddress)address).getPort();
+            } else {
+                return "";
+            }
         }
     }
 

@@ -17,11 +17,12 @@ import java.util.concurrent.atomic.AtomicLong;
 @DubboComponentScan(basePackages = "io.joyrpc.example.dubbo.consumer")
 public class DubboClient {
 
-    @Reference(version = "0.0.0", group = "2.0-Boot", url = "127.0.0.1:22000", timeout = 50000)
+    // @Reference(version = "0.0.0", group = "2.0-Boot", url = "127.0.0.1:22000", timeout = 50000)
     /*@Reference(group = "joyrpc-demo", url = "127.0.0.1:22000", timeout = 50000,
             methods = {@Method(name = "echoCallback", arguments = {@Argument(index = 0, callback = true)})},
             parameters = {"echoCallback.0.callback", "true"}
     )*/
+    @Reference(version = "0.0.0", group = "2.0-Boot", timeout = 50000)
     private DemoService demoService;
 
     public static void main(String[] args) throws IOException {
