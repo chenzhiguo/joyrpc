@@ -21,14 +21,12 @@ package io.joyrpc.transport.netty4.transport;
  */
 
 import io.joyrpc.constants.Constants;
-import io.joyrpc.event.AsyncResult;
 import io.joyrpc.exception.ConnectionException;
 import io.joyrpc.exception.SslException;
 import io.joyrpc.extension.URL;
 import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.channel.ChannelManager.Connector;
 import io.joyrpc.transport.heartbeat.HeartbeatStrategy.HeartbeatMode;
-import io.joyrpc.transport.netty4.Plugin;
 import io.joyrpc.transport.netty4.binder.HandlerBinder;
 import io.joyrpc.transport.netty4.channel.NettyClientChannel;
 import io.joyrpc.transport.netty4.handler.ConnectionChannelHandler;
@@ -53,13 +51,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 import static io.joyrpc.constants.Constants.*;
+import static io.joyrpc.transport.netty4.Plugin.HANDLER_BINDER;
 
 /**
- * @date: 2019/2/21
+ * Netty客户端连接
  */
 public class NettyClientTransport extends AbstractClientTransport {
     private static final Logger logger = LoggerFactory.getLogger(NettyClientTransport.class);
@@ -79,26 +78,15 @@ public class NettyClientTransport extends AbstractClientTransport {
 
     /**
      * 创建channel
-     *
-     * @param consumer
      */
-    protected void connect(final Consumer<AsyncResult<Channel>> consumer) {
+    protected CompletableFuture<Channel> connect() {
+        CompletableFuture<Channel> future = new CompletableFuture<>();
         //consumer不会为空
         if (codec == null) {
-            consumer.accept(new AsyncResult<>(error("codec can not be null!")));
+            future.completeExceptionally(error("codec can not be null!"));
         } else {
             final EventLoopGroup[] ioGroups = new EventLoopGroup[1];
             final Channel[] channels = new Channel[1];
-            //当出现异常的时候关闭线程池
-            Consumer<AsyncResult<Channel>> myConsumer = result -> {
-                if (!result.isSuccess()) {
-                    //异常的时候都赋值了
-                    Channel channel = result.getResult();
-                    channel.close(r -> consumer.accept(result));
-                } else {
-                    consumer.accept(result);
-                }
-            };
             try {
                 ioGroups[0] = EventLoopGroupFactory.getClientGroup(url);
                 //获取SSL上下文
@@ -284,21 +272,22 @@ public class NettyClientTransport extends AbstractClientTransport {
                     // Bind and start to accept incoming connections.
                     bootstrap.connect(url.getHost(), url.getPort()).addListener((ChannelFutureListener) f -> {
                         if (f.isSuccess()) {
-                            myConsumer.accept(new AsyncResult<>(channels[0]));
+                            future.complete(channels[0]);
                         } else {
-                            myConsumer.accept(new AsyncResult<>(new NettyClientChannel(f.channel(), ioGroups[0]), error(f.cause())));
+                            future.completeExceptionally(error(f.cause()));
                         }
                     });
                 }
             } catch (SslException e) {
-                myConsumer.accept(new AsyncResult<>(new NettyClientChannel(null, ioGroups[0]), e));
+                future.completeExceptionally(e);
             } catch (ConnectionException e) {
-                myConsumer.accept(new AsyncResult<>(new NettyClientChannel(null, ioGroups[0]), e));
+                future.completeExceptionally(e);
             } catch (Throwable e) {
                 //捕获Throwable，防止netty报错
-                myConsumer.accept(new AsyncResult<>(new NettyClientChannel(null, ioGroups[0]), error(e)));
+                future.completeExceptionally(error(e));
             }
         }
+        return future;
     }
 
     /**
@@ -337,7 +326,7 @@ public class NettyClientTransport extends AbstractClientTransport {
                         //添加连接事件监听
                         ch.pipeline().addLast("connection", new ConnectionChannelHandler(channels[0], publisher));
                         //添加编解码和处理链
-                        HandlerBinder binder = Plugin.HANDLER_BINDER.get(codec.binder());
+                        HandlerBinder binder = HANDLER_BINDER.get(codec.binder());
                         binder.bind(ch.pipeline(), codec, handlerChain, channels[0]);
                         //若配置idle心跳策略，配置心跳handler
                         if (heartbeatStrategy != null && heartbeatStrategy.getHeartbeatMode() == HeartbeatMode.IDLE) {
@@ -364,18 +353,18 @@ public class NettyClientTransport extends AbstractClientTransport {
     /**
      * 连接异常
      *
-     * @param message
-     * @return
+     * @param message 异常消息
+     * @return 异常
      */
     protected Throwable error(final String message) {
         return message == null || message.isEmpty() ? new ConnectionException("Unknown error.") : new ConnectionException(message);
     }
 
     /**
-     * 连接异常
+     * 异常转换
      *
-     * @param throwable
-     * @return
+     * @param throwable 异常
+     * @return 异常
      */
     protected Throwable error(final Throwable throwable) {
         return throwable == null ?

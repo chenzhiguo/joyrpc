@@ -42,9 +42,8 @@ import io.joyrpc.extension.URL;
 import io.joyrpc.protocol.message.Invocation;
 import io.joyrpc.protocol.message.RequestMessage;
 import io.joyrpc.transport.channel.ChannelManagerFactory;
-import io.joyrpc.util.Futures;
-import io.joyrpc.util.Status;
-import io.joyrpc.util.SystemClock;
+import io.joyrpc.util.*;
+import io.joyrpc.util.StateMachine.IntStateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,21 +59,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static io.joyrpc.GenericService.GENERIC;
 import static io.joyrpc.Plugin.TRANSMIT;
 import static io.joyrpc.constants.Constants.*;
 import static io.joyrpc.util.ClassUtils.forName;
 import static io.joyrpc.util.ClassUtils.isReturnFuture;
-import static io.joyrpc.util.Status.*;
 
 /**
  * 抽象消费者配置
  */
 public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig {
-    protected static final AtomicReferenceFieldUpdater<AbstractConsumerConfig, Status> STATE_UPDATER =
-            AtomicReferenceFieldUpdater.newUpdater(AbstractConsumerConfig.class, Status.class, "status");
     private final static Logger logger = LoggerFactory.getLogger(AbstractConsumerConfig.class);
 
     /**
@@ -165,7 +160,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
     /**
      * 节点选择器
      */
-    @ValidatePlugin(extensible = NodeSelector.class, name = "NODE_SELECTOR")
+    @ValidatePlugin(extensible = NodeSelector.class, name = "NODE_SELECTOR", multiple = true)
     protected String nodeSelector;
     /**
      * 预热权重
@@ -188,21 +183,9 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
      */
     protected transient List<EventHandler<NodeEvent>> eventHandlers = new CopyOnWriteArrayList<>();
     /**
-     * 打开的结果
+     * 状态机
      */
-    protected transient volatile CompletableFuture<Void> openFuture;
-    /**
-     * 关闭Future
-     */
-    protected transient volatile CompletableFuture<Void> closeFuture = CompletableFuture.completedFuture(null);
-    /**
-     * 状态
-     */
-    protected transient volatile Status status = Status.CLOSED;
-    /**
-     * 控制器
-     */
-    protected transient volatile AbstractConsumerController<T, ? extends AbstractConsumerConfig> controller;
+    protected transient volatile IntStateMachine<Void, ConsumerPilot> stateMachine = new IntStateMachine<>(()->create());
 
     public AbstractConsumerConfig() {
     }
@@ -247,19 +230,12 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
         if (stub == null) {
             final Class<T> proxyClass = getProxyClass();
             stub = getProxyFactory().getProxy(proxyClass, (proxy, method, args) -> {
-                AbstractConsumerController<T, ? extends AbstractConsumerConfig> cc = controller;
                 try {
-                    if (cc == null) {
-                        switch (status) {
-                            case CLOSING:
-                                throw new RpcException("Consumer config is closing. " + name());
-                            case CLOSED:
-                                throw new RpcException("Consumer config is closed. " + name());
-                            default:
-                                throw new RpcException("Consumer config is opening. " + name());
-                        }
+                    ConsumerPilot pilot = stateMachine.getController(s -> s.isOpened());
+                    if (pilot == null) {
+                        throw new RpcException("Consumer config is not opened. " + name());
                     } else {
-                        return cc.invoke(proxy, method, args);
+                        return pilot.invoke(proxy, method, args);
                     }
                 } catch (Throwable e) {
                     if (isReturnFuture(proxyClass, method)) {
@@ -274,7 +250,11 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
 
     @Override
     protected boolean isClose() {
-        return status.isClose() || super.isClose();
+        return stateMachine.isClose(null) || super.isClose();
+    }
+
+    protected boolean isClose(final AbstractConsumerPilot<?, ?> controller) {
+        return stateMachine.isClose(controller) || super.isClose();
     }
 
     /**
@@ -284,13 +264,11 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
      */
     public CompletableFuture<T> refer() {
         CompletableFuture<T> result = new CompletableFuture<>();
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        final T obj = refer(future);
-        future.whenComplete((v, t) -> {
-            if (t != null) {
-                result.completeExceptionally(t);
+        stateMachine.open().whenComplete((v, e) -> {
+            if (e == null) {
+                result.complete(stub);
             } else {
-                result.complete(obj);
+                result.completeExceptionally(e);
             }
         });
         return result;
@@ -306,46 +284,13 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
      */
     @Deprecated
     public T refer(final CompletableFuture<Void> future) {
-        if (STATE_UPDATER.compareAndSet(this, Status.CLOSED, Status.OPENING)) {
-            GlobalContext.getContext();
-            logger.info(String.format("Start refering consumer %s with bean id %s", name(), id));
-            final CompletableFuture<Void> f = new CompletableFuture<>();
-            final AbstractConsumerController<T, ? extends AbstractConsumerConfig> cc = create();
-            openFuture = f;
-            controller = cc;
-            cc.open().whenComplete((v, e) -> {
-                if (openFuture != f || e == null && !STATE_UPDATER.compareAndSet(this, Status.OPENING, Status.OPENED)) {
-                    logger.error(String.format("Error occurs while referring %s with bean id %s,caused by state is illegal. ", name(), id));
-                    //已经被关闭了
-                    Throwable throwable = new InitializationException("state is illegal.");
-                    f.completeExceptionally(throwable);
-                    Optional.ofNullable(future).ifPresent(o -> o.completeExceptionally(throwable));
-                    cc.close();
-                } else if (e != null) {
-                    logger.error(String.format("Error occurs while referring %s with bean id %s,caused by %s. ", name(), id, e.getMessage()), e);
-                    f.completeExceptionally(e);
-                    Optional.ofNullable(future).ifPresent(o -> o.completeExceptionally(e));
-                    unrefer(false);
-                } else {
-                    logger.info(String.format("Success refering consumer %s with bean id %s", name(), id));
-                    f.complete(null);
-                    Optional.ofNullable(future).ifPresent(o -> o.complete(null));
-                    //触发配置更新
-                    cc.update();
-                }
-            });
-        } else {
-            switch (status) {
-                case OPENING:
-                case OPENED:
-                    //可重入，没有并发调用
-                    Futures.chain(openFuture, future);
-                    break;
-                default:
-                    //其它状态不应该并发执行
-                    Optional.ofNullable(future).ifPresent(o -> o.completeExceptionally(new InitializationException("state is illegal.")));
+        stateMachine.open().whenComplete((v, e) -> {
+            if (e == null) {
+                Optional.ofNullable(future).ifPresent(o -> o.complete(null));
+            } else {
+                Optional.ofNullable(future).ifPresent(o -> o.completeExceptionally(e));
             }
-        }
+        });
 
         return stub;
 
@@ -357,7 +302,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
      *
      * @return 控制器
      */
-    protected abstract AbstractConsumerController<T, ? extends AbstractConsumerConfig> create();
+    protected abstract ConsumerPilot create();
 
     /**
      * 注销
@@ -376,41 +321,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
      * @return CompletableFuture
      */
     public CompletableFuture<Void> unrefer(final boolean gracefully) {
-        if (STATE_UPDATER.compareAndSet(this, OPENING, CLOSING)) {
-            logger.info(String.format("Start unrefering consumer %s with bean id %s", name(), id));
-            CompletableFuture<Void> future = new CompletableFuture<>();
-            closeFuture = future;
-            //终止等待的请求
-            controller.broken();
-            openFuture.whenComplete((v, e) -> {
-                //openFuture完成后会自动关闭控制器
-                logger.info("Success unrefering consumer " + name());
-                status = CLOSED;
-                controller = null;
-                future.complete(null);
-            });
-            return closeFuture;
-        } else if (STATE_UPDATER.compareAndSet(this, OPENED, CLOSING)) {
-            logger.info(String.format("Start unrefering consumer  %s with bean id %s", name(), id));
-            //状态从打开到关闭中，该状态只能变更为CLOSED
-            CompletableFuture<Void> future = new CompletableFuture<>();
-            closeFuture = future;
-            controller.close(gracefully).whenComplete((o, s) -> {
-                logger.info("Success unrefering consumer " + name());
-                status = CLOSED;
-                controller = null;
-                future.complete(null);
-            });
-            return closeFuture;
-        } else {
-            switch (status) {
-                case CLOSING:
-                case CLOSED:
-                    return closeFuture;
-                default:
-                    return Futures.completeExceptionally(new IllegalStateException("Status is illegal."));
-            }
-        }
+        return stateMachine.close(gracefully);
     }
 
     @Override
@@ -692,10 +603,17 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
     }
 
     /**
+     * 消费者控制器接口
+     */
+    protected interface ConsumerPilot extends InvocationHandler, StateController<Void> {
+
+    }
+
+    /**
      * 控制器
      */
-    protected static abstract class AbstractConsumerController<T, C extends AbstractConsumerConfig<T>>
-            extends AbstractController<C> implements InvocationHandler {
+    protected static abstract class AbstractConsumerPilot<T, C extends AbstractConsumerConfig<T>>
+            extends AbstractController<C> implements ConsumerPilot, EventHandler<StateEvent> {
 
         /**
          * 注册中心配置
@@ -716,9 +634,9 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
         /**
          * 调用handler
          */
-        protected volatile ConsumerInvokeHandler invokeHandler;
+        protected volatile ConsumerInvocationHandler invocationHandler;
         /**
-         * 等待invokeHandler初始化
+         * 等待open结束，invokeHandler初始化
          */
         protected CountDownLatch latch = new CountDownLatch(1);
 
@@ -727,18 +645,47 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
          *
          * @param config 配置
          */
-        public AbstractConsumerController(C config) {
+        public AbstractConsumerPilot(C config) {
             super(config);
         }
 
         @Override
+        public void handle(final StateEvent event) {
+            Throwable e = event.getThrowable();
+            //控制器事件
+            switch (event.getType()) {
+                case StateEvent.START_OPEN:
+                    GlobalContext.getContext();
+                    logger.info(String.format("Start refering consumer %s with bean id %s", config.name(), config.id));
+                    break;
+                case StateEvent.SUCCESS_OPEN:
+                    logger.info(String.format("Success refering consumer %s with bean id %s", config.name(), config.id));
+                    //触发配置更新
+                    update();
+                    break;
+                case StateEvent.FAIL_OPEN_ILLEGAL_STATE:
+                    logger.error(String.format("Error occurs while referring %s with bean id %s,caused by state is illegal. ", config.name(), config.id));
+                    break;
+                case StateEvent.FAIL_OPEN:
+                    logger.error(String.format("Error occurs while referring %s with bean id %s,caused by %s. ", config.name(), config.id, e.getMessage()), e);
+                    break;
+                case StateEvent.START_CLOSE:
+                    logger.info(String.format("Start unrefering consumer %s with bean id %s", config.name(), config.id));
+                    break;
+                case StateEvent.SUCCESS_CLOSE:
+                    logger.info("Success unrefering consumer " + config.name());
+                    break;
+            }
+        }
+
+        @Override
         protected boolean isClose() {
-            return config.isClose() || config.controller != this;
+            return config.isClose(this);
         }
 
         @Override
         protected boolean isOpened() {
-            return config.status == OPENED;
+            return config.stateMachine.isOpened(this);
         }
 
         /**
@@ -796,12 +743,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
             return close(parametric.getBoolean(Constants.GRACEFULLY_SHUTDOWN_OPTION));
         }
 
-        /**
-         * 关闭
-         *
-         * @param gracefully 是否优雅关闭
-         * @return CompletableFuture
-         */
+        @Override
         public CompletableFuture<Void> close(boolean gracefully) {
             return CompletableFuture.completedFuture(null);
         }
@@ -813,23 +755,21 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
 
         @Override
         public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
-            ConsumerInvokeHandler handler = invokeHandler;
+            ConsumerInvocationHandler handler = invocationHandler;
             if (handler == null) {
-                switch (config.status) {
-                    case CLOSING:
-                        throw new RpcException("Consumer config is closing. " + config.name());
-                    case CLOSED:
-                        throw new RpcException("Consumer config is closed. " + config.name());
-                    case OPENING:
-                        //正在opening，等待open完
-                        latch.await();
-                        if (invokeHandler == null) {
-                            throw new RpcException("Consumer config is opening. " + config.name());
-                        }
-                        handler = invokeHandler;
-                        break;
-                    default:
+                State state = config.stateMachine.getState();
+                if (state.isOpened()) {
+                    handler = invocationHandler;
+                    if (handler == null) {
                         throw new RpcException("Consumer config is opening. " + config.name());
+                    }
+                } else if (state.isClosed()) {
+                    throw new RpcException("Consumer config is closed. " + config.name());
+                } else if (state.isClosing()) {
+                    throw new RpcException("Consumer config is closing. " + config.name());
+                } else if (state.isOpening()) {
+                    //等待初始化
+                    latch.await();
                 }
             }
             return handler.invoke(proxy, method, args);
@@ -840,7 +780,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
     /**
      * 消费者调用
      */
-    protected static class ConsumerInvokeHandler implements InvocationHandler {
+    protected static class ConsumerInvocationHandler implements InvocationHandler {
         /**
          * The Method name toString.
          */
@@ -893,7 +833,7 @@ public abstract class AbstractConsumerConfig<T> extends AbstractInterfaceConfig 
          * @param iface      接口类
          * @param serviceUrl 服务url
          */
-        public ConsumerInvokeHandler(final Invoker invoker, final Class<?> iface, final URL serviceUrl) {
+        public ConsumerInvocationHandler(final Invoker invoker, final Class<?> iface, final URL serviceUrl) {
             this.invoker = invoker;
             this.iface = iface;
             this.async = serviceUrl.getBoolean(Constants.ASYNC_OPTION);

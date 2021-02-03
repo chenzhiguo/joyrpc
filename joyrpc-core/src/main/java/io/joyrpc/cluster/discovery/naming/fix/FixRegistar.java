@@ -23,7 +23,6 @@ package io.joyrpc.cluster.discovery.naming.fix;
 import io.joyrpc.cluster.Shard;
 import io.joyrpc.cluster.discovery.naming.AbstractRegistar;
 import io.joyrpc.cluster.discovery.naming.ClusterProvider;
-import io.joyrpc.constants.Constants;
 import io.joyrpc.context.GlobalContext;
 import io.joyrpc.exception.InitializationException;
 import io.joyrpc.extension.MapParametric;
@@ -38,6 +37,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 
 import static io.joyrpc.cluster.Shard.WEIGHT;
+import static io.joyrpc.constants.Constants.DEFAULT_PORT;
+import static io.joyrpc.constants.Constants.PROTOCOL_KEY;
 import static io.joyrpc.util.StringUtils.SEMICOLON_COMMA_WHITESPACE;
 
 /**
@@ -118,8 +119,8 @@ public class FixRegistar extends AbstractRegistar {
             int j = 0;
             URL nodeUrl;
             Parametric parametric = new MapParametric(GlobalContext.getContext());
-            String defProtocol = parametric.getString(Constants.PROTOCOL_KEY);
-            Integer defPort = url.getInteger(Constants.PORT_OPTION);
+            String defProtocol = parametric.getString(PROTOCOL_KEY);
+            Integer defPort = url.getPort() <= 0 ? DEFAULT_PORT : url.getPort();
             for (String shard : shards) {
                 nodeUrl = URL.valueOf(shard, defProtocol, defPort, null);
                 result.add(new Shard.DefaultShard(name != null ? name + "-" + j++ : nodeUrl.getAddress(),

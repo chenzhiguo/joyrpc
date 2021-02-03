@@ -34,10 +34,13 @@ import java.util.Objects;
 
 import static io.joyrpc.constants.Constants.TAG_KEY_OPTION;
 
-@Extension(value = TagSelector.TAG_ROUTER)
+/**
+ * 基于标签的节点选择器
+ */
+@Extension(value = TagSelector.TAG_SELECTOR)
 public class TagSelector implements NodeSelector {
 
-    public static final String TAG_ROUTER = "tagRouter";
+    public static final String TAG_SELECTOR = "tagSelector";
 
     /**
      * URL配置

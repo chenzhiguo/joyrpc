@@ -518,10 +518,11 @@ public class Constants {
      */
     public static final URLBiOption<Boolean> ALIAS_EMPTY_OPTION = new URLBiOption<>("alias.empty", "emptyAlias", false);
 
+    public static final String TIMEOUT_KEY = "timeout";
     /**
      * 消费者调用超时时间
      */
-    public static final URLOption<Integer> TIMEOUT_OPTION = new URLOption<>("timeout", DEFAULT_TIMEOUT);
+    public static final URLOption<Integer> TIMEOUT_OPTION = new URLOption<>(TIMEOUT_KEY, DEFAULT_TIMEOUT);
     public static final URLOption<Boolean> REGISTER_OPTION = new URLOption<>("register", true);
     public static final URLOption<Boolean> SUBSCRIBE_OPTION = new URLOption<>("subscribe", true);
     public static final URLOption<String> SERVICE_NAME_OPTION = new URLOption<>(SERVICE_NAME_KEY, "");
@@ -548,11 +549,15 @@ public class Constants {
      * 分发选项
      */
     public static final URLOption<String> ROUTER_OPTION = new URLOption<>("router", DEFAULT_ROUTER);
-    public static final URLOption<String> NODE_SELECTOR_OPTION = new URLOption<>("nodeSelector", (String) null);
+    /**
+     * 节点选择器选项
+     */
+    public static final URLOption<String> NODE_SELECTOR_OPTION = new URLOption<>("nodeSelector", "simple");
     public static final URLOption<String> FAILOVER_WHEN_THROWABLE_OPTION = new URLOption<>("failoverWhenThrowable", "");
     public static final URLOption<String> FAILOVER_PREDICATION_OPTION = new URLOption<>("failoverPredication", "");
     public static final URLOption<Boolean> FROM_GROUP_OPTION = new URLOption<>("_fromGroup", false);
     public static final URLOption<String> TAG_KEY_OPTION = new URLOption<>("tagKey", () -> GlobalContext.getString("tagKey", "serviceTag"));
+    public static final URLOption<Integer> SIMPLE_SELECTOR_OPTION = new URLOption<>("nodeSimple", 100);
     /**
      * 默认连接工厂
      */
@@ -694,9 +699,13 @@ public class Constants {
      */
     public static final URLOption<Integer> BUFFER_OPTION = new URLOption<>("buffer", 8 * 1024);
     /**
-     * 默认启动端口，包括不配置或者随机，都从此端口开始计算
+     * 服务端口配置键
      */
-    public static final URLOption<Integer> PORT_OPTION = new URLOption<>("port", 22000);
+    public static final String SERVER_PORT_KEY = "server.port";
+    /**
+     * 默认服务端口
+     */
+    public static final int DEFAULT_PORT = 22000;
     /**
      * 默认客户端和服务端创建工厂
      */

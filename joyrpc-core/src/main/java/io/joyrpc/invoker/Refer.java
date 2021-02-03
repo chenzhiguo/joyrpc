@@ -67,6 +67,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -80,6 +81,7 @@ import java.util.function.Function;
 import static io.joyrpc.Plugin.*;
 import static io.joyrpc.constants.Constants.*;
 import static io.joyrpc.constants.ExceptionCode.CONSUMER_NO_ALIVE_PROVIDER;
+import static io.joyrpc.util.StringUtils.split;
 import static io.joyrpc.util.Timer.timer;
 
 /**
@@ -120,7 +122,7 @@ public class Refer extends AbstractService {
     /**
      * 路由节点选择器
      */
-    protected NodeSelector nodeSelector;
+    protected NodeSelector[] nodeSelectors;
     /**
      * 回调容器
      */
@@ -217,8 +219,8 @@ public class Refer extends AbstractService {
 
         this.inJvm = url.getBoolean(Constants.IN_JVM_OPTION);
         this.exporterName = EXPORTER_NAME_FUNC.apply(interfaceName, alias);
-        //路由器
-        this.nodeSelector = configure(NODE_SELECTOR.get(url.getString(Constants.NODE_SELECTOR_OPTION)));
+        //节点选择器
+        this.nodeSelectors = buildSelectors();
         //方法选项
         this.option = INTERFACE_OPTION_FACTORY.get().create(interfaceClass, interfaceName, url, this::configure,
                 loadBalance instanceof AdaptiveScorer ? (method, cfg) -> ((AdaptiveScorer) loadBalance).score(cluster, method, cfg) : null);
@@ -272,10 +274,9 @@ public class Refer extends AbstractService {
         }
         //捕获内部异常，可能在重试线程里面调用，用户线程异常捕获不了异常
         try {
-            Session session = client.session();
             //header 使用协商结果
             MessageHeader header = request.getHeader();
-            header.copy(session);
+            header.copy(client.session());
             //条件透传注入
             for (NodeReqInjection injection : injections) {
                 if (last != null) {
@@ -290,27 +291,49 @@ public class Refer extends AbstractService {
                 container.addCallback(request, client);
             }
             //异步发起调用
-            CompletableFuture<Message> msgFuture = client.async(request, header.getTimeout());
+            CompletableFuture<Message> future = client.async(request, header.getTimeout());
 
             //返回future
-            return msgFuture.handle((msg, err) -> {
-                Result result;
+            return future.handle((response, err) -> {
                 //线程恢复统一改在consumerInvokerHandler里面
-                if (err != null) {
-                    result = new Result(request.getContext(), err, msg);
-                } else {
-                    result = buildResult(request, msg, client.getProtocol());
-                }
+                Result result = err != null ? new Result(request.getContext(), err, response) : response2Result(request, client, response);
                 if (result.isException()) {
                     //异常处理
                     onException(request, result, client);
                 }
-
                 return result;
             });
         } catch (Throwable e) {
             return Futures.completeExceptionally(e);
         }
+    }
+
+    /**
+     * 把应答消息转换成调用结果
+     *
+     * @param request  请求
+     * @param client   客户端
+     * @param response 应答消息
+     * @return 调用结果
+     */
+    protected Result response2Result(final RequestMessage<Invocation> request, final Client client, final Message response) {
+        ClientProtocol protocol = client.getProtocol();
+        //拿到Response对象
+        ResponsePayload payLoad = (ResponsePayload) response.getPayLoad();
+        //返回值为空或为void，response可能为空
+        if (payLoad == null) {
+            payLoad = new ResponsePayload();
+            response.setPayLoad(payLoad);
+        }
+        //根据协议拿到应答消息转换器，在网关调用会用到
+        MessageConverter converter = protocol.inMessage();
+        BiFunction<Message, Object, Object> function = converter == null ? null : converter.response();
+        //构造返回值
+        Result result = payLoad.isError() ?
+                new Result(request.getContext(), payLoad.getException(), response) :
+                new Result(request.getContext(), function == null ? payLoad.getResponse() :
+                        function.apply(request, payLoad.getResponse()), response);
+        return result;
     }
 
     /**
@@ -334,47 +357,31 @@ public class Refer extends AbstractService {
     }
 
     /**
-     * 转换成结果对象
-     *
-     * @param request  请求
-     * @param response 应答
-     * @param protocol 协议
-     * @return 结果
-     */
-    protected Result buildResult(final RequestMessage<Invocation> request, final Message response,
-                                 final ClientProtocol protocol) {
-        //拿到Response对象
-        ResponsePayload payLoad = (ResponsePayload) response.getPayLoad();
-        //返回值为空或为void，response可能为空
-        if (payLoad == null) {
-            payLoad = new ResponsePayload();
-            response.setPayLoad(payLoad);
-        }
-        //根据协议拿到应答消息转换器，在网关调用会用到
-        MessageConverter converter = protocol.inMessage();
-        BiFunction<Message, Object, Object> function = converter == null ? null : converter.response();
-        //构造返回值
-        return payLoad.isError() ? new Result(request.getContext(), payLoad.getException(), response) :
-                new Result(request.getContext(),
-                        function == null ? payLoad.getResponse() :
-                                function.apply(request, payLoad.getResponse()), response);
-    }
-
-    /**
      * 配置路由器
      *
-     * @param selector 路由节点选择器
      * @return 路由节点选择器
      */
-    protected NodeSelector configure(final NodeSelector selector) {
-        if (selector != null) {
-            selector.setUrl(url);
-            selector.setClass(interfaceClass);
-            selector.setClassName(interfaceName);
-            selector.setup();
+    protected NodeSelector[] buildSelectors() {
+        String value = url.getString(NODE_SELECTOR_OPTION);
+        if (value != null && !value.isEmpty()) {
+            String[] parts = split(value, ',');
+            List<NodeSelector> selectors = new ArrayList<>(parts.length);
+            NodeSelector selector;
+            for (int i = 0; i < parts.length; i++) {
+                selector = NODE_SELECTOR.get(parts[i]);
+                if (selector != null) {
+                    selector.setUrl(url);
+                    selector.setClass(interfaceClass);
+                    selector.setClassName(interfaceName);
+                    selector.setup();
+                    selectors.add(selector);
+                }
+            }
+            return selectors.toArray(new NodeSelector[0]);
         }
-        return selector;
+        return null;
     }
+
 
     /**
      * 配置分发策略
@@ -421,7 +428,7 @@ public class Refer extends AbstractService {
         //超时时间放在后面，Invocation已经注入了请求上下文参数，隐藏参数等等
         if (request.getHeader().getTimeout() <= 0) {
             Parametric parametric = new MapParametric(invocation.getAttachments());
-            int timeout = parametric.getPositive(HIDDEN_KEY_TIME_OUT, option.getTimeout());
+            int timeout = parametric.getPositive(TIMEOUT_KEY, option.getTimeout());
             //超时时间
             request.setTimeout(timeout);
             request.getHeader().setTimeout(timeout);
@@ -448,9 +455,19 @@ public class Refer extends AbstractService {
         }
         //集群节点
         List<Node> nodes = cluster.getNodes();
-        if (!nodes.isEmpty() && nodeSelector != null) {
-            //路由选择
-            nodes = nodeSelector.select(new Candidate(cluster, null, nodes, nodes.size()), request);
+        if (!nodes.isEmpty() && nodeSelectors != null) {
+            //节点选择
+            Candidate candidate = new Candidate(cluster, null, nodes, nodes.size());
+            NodeSelector selector;
+            int count = 0;
+            //遍历选择器，筛选节点
+            for (int i = 0; i < nodeSelectors.length; i++) {
+                selector = nodeSelectors[i];
+                if (selector != null) {
+                    nodes = selector.select(count == 0 ? candidate : new Candidate(candidate, nodes), request);
+                    count++;
+                }
+            }
         }
         if (nodes == null || nodes.isEmpty()) {
             //节点为空
@@ -537,14 +554,7 @@ public class Refer extends AbstractService {
             }
         });
         //打开集群不需要等到注册成功，因为可以从本地文件恢复。打开之前，已经提前进行了订阅获取全局配置
-        cluster.open(o -> {
-            if (o.isSuccess()) {
-                result.complete(null);
-            } else {
-                result.completeExceptionally(o.getThrowable());
-            }
-        });
-        return result;
+        return cluster.open();
     }
 
     @Override
@@ -558,10 +568,8 @@ public class Refer extends AbstractService {
         //取消配置订阅
         CompletableFuture<Void> future2 = unsubscribe().whenComplete((v, t) -> logger.info("Success unsubscribe consumer config " + name));
         //关闭集群
-        final CompletableFuture<Void> future3 = new CompletableFuture<>();
-        cluster.close(r -> {
+        CompletableFuture<Void> future3 = cluster.close().whenComplete((v, error) -> {
             logger.info("Success close cluster " + name);
-            future3.complete(null);
         });
         //关闭过滤链
         CompletableFuture<Void> future4 = chain.close().whenComplete((v, t) -> logger.info("Success close filter chain " + name));

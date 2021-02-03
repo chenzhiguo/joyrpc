@@ -22,7 +22,6 @@ package io.joyrpc.transport.transport;
 
 
 import io.joyrpc.constants.Constants;
-import io.joyrpc.event.AsyncResult;
 import io.joyrpc.event.EventHandler;
 import io.joyrpc.event.Publisher;
 import io.joyrpc.exception.ConnectionException;
@@ -31,12 +30,10 @@ import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.channel.ChannelHandlerChain;
 import io.joyrpc.transport.channel.ServerChannel;
 import io.joyrpc.transport.codec.Codec;
-import io.joyrpc.transport.codec.ProtocolAdapter;
+import io.joyrpc.transport.codec.ProtocolDeduction;
 import io.joyrpc.transport.event.TransportEvent;
-import io.joyrpc.util.Futures;
-import io.joyrpc.util.Status;
-import io.joyrpc.util.SystemClock;
-import io.joyrpc.util.Timer;
+import io.joyrpc.util.*;
+import io.joyrpc.util.StateMachine.IntStateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,24 +42,23 @@ import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.joyrpc.Plugin.EVENT_BUS;
-import static io.joyrpc.constants.Constants.*;
-import static io.joyrpc.util.Status.*;
+import static io.joyrpc.constants.Constants.EVENT_PUBLISHER_SERVER_NAME;
+import static io.joyrpc.constants.Constants.EVENT_PUBLISHER_TRANSPORT_CONF;
 import static io.joyrpc.util.Timer.timer;
 
 /**
- * 抽象的服务通道
+ * 抽象的服务传输通道
  */
 public abstract class AbstractServerTransport implements ServerTransport {
     private static final Logger logger = LoggerFactory.getLogger(AbstractServerTransport.class);
-    protected static final AtomicReferenceFieldUpdater<AbstractServerTransport, Status> STATE_UPDATER =
-            AtomicReferenceFieldUpdater.newUpdater(AbstractServerTransport.class, Status.class, "status");
+    public static final Function<String, Throwable> THROWABLE_FUNCTION = error -> new ConnectionException(error);
     /**
      * 计数器
      */
@@ -74,7 +70,7 @@ public abstract class AbstractServerTransport implements ServerTransport {
     /**
      * 协议适配器
      */
-    protected ProtocolAdapter adapter;
+    protected ProtocolDeduction deduction;
     /**
      * 处理链
      */
@@ -91,6 +87,7 @@ public abstract class AbstractServerTransport implements ServerTransport {
      * 服务通道
      */
     protected ServerChannel serverChannel;
+    //TODO 海量连接，数据流很大
     /**
      * 上下文
      */
@@ -116,34 +113,18 @@ public abstract class AbstractServerTransport implements ServerTransport {
      */
     protected int transportId = ID_GENERATOR.get();
     /**
-     * 打开的结果
+     * 状态机
      */
-    protected volatile CompletableFuture<Channel> openFuture;
-    /**
-     * 关闭的结果
-     */
-    protected volatile CompletableFuture<Channel> closeFuture;
-    /**
-     * 状态
-     */
-    protected volatile Status status = CLOSED;
+    protected IntStateMachine<Channel, StateController<Channel>> stateMachine = new IntStateMachine<>(
+            () -> new TransportController(this), THROWABLE_FUNCTION,
+            new StateFuture<>(
+                    () -> beforeOpen == null ? null : beforeOpen.apply(AbstractServerTransport.this),
+                    () -> afterClose == null ? null : afterClose.apply(AbstractServerTransport.this)));
 
-    /**
-     * 构造函数
-     *
-     * @param url
-     */
     public AbstractServerTransport(URL url) {
         this(url, null, null);
     }
 
-    /**
-     * 构造函数
-     *
-     * @param url
-     * @param beforeOpen
-     * @param afterClose
-     */
     public AbstractServerTransport(final URL url,
                                    final Function<ServerTransport, CompletableFuture<Void>> beforeOpen,
                                    final Function<ServerTransport, CompletableFuture<Void>> afterClose) {
@@ -156,32 +137,8 @@ public abstract class AbstractServerTransport implements ServerTransport {
     }
 
     @Override
-    public Channel open() throws ConnectionException, InterruptedException {
-        CountDownLatch latch = new CountDownLatch(1);
-        ConnectionException[] ex = new ConnectionException[1];
-        open(r -> {
-            try {
-                if (!r.isSuccess()) {
-                    Throwable throwable = r.getThrowable();
-                    if (throwable != null) {
-                        if (throwable instanceof ConnectionException) {
-                            ex[0] = (ConnectionException) throwable;
-                        } else {
-                            ex[0] = new ConnectionException("Server start fail !", throwable);
-                        }
-                    } else {
-                        ex[0] = new ConnectionException("Server start fail !");
-                    }
-                }
-            } finally {
-                latch.countDown();
-            }
-        });
-        latch.await(url.getNaturalInt(CONNECT_TIMEOUT_OPTION), TimeUnit.MILLISECONDS);
-        if (ex[0] != null) {
-            throw ex[0];
-        }
-        return serverChannel;
+    public CompletableFuture<Channel> open() {
+        return stateMachine.open();
     }
 
     @Override
@@ -284,6 +241,11 @@ public abstract class AbstractServerTransport implements ServerTransport {
         return afterClose != null ? afterClose.apply(this) : CompletableFuture.completedFuture(null);
     }
 
+    @Override
+    public CompletableFuture<Channel> close() {
+        return stateMachine.close(false);
+    }
+
     /**
      * 关闭
      *
@@ -311,15 +273,14 @@ public abstract class AbstractServerTransport implements ServerTransport {
     /**
      * 启动服务
      *
-     * @param host     地址
-     * @param port     端口
-     * @param consumer 消费者，不会为空
+     * @param host 地址
+     * @param port 端口
      */
-    protected abstract void bind(String host, int port, Consumer<AsyncResult<Channel>> consumer);
+    protected abstract CompletableFuture<Channel> bind(String host, int port);
 
     @Override
-    public Status getStatus() {
-        return status;
+    public State getState() {
+        return stateMachine.getState();
     }
 
     /**
@@ -362,8 +323,8 @@ public abstract class AbstractServerTransport implements ServerTransport {
     }
 
     @Override
-    public void setAdapter(final ProtocolAdapter adapter) {
-        this.adapter = adapter;
+    public void setDeduction(final ProtocolDeduction deduction) {
+        this.deduction = deduction;
     }
 
     @Override
@@ -394,26 +355,20 @@ public abstract class AbstractServerTransport implements ServerTransport {
     /**
      * 绑定Channel和Transport
      *
-     * @param channel
-     * @param transport
+     * @param channel   连接通道
+     * @param transport 传输通道
      */
     protected void addChannel(final Channel channel, final ChannelTransport transport) {
         if (channel != null && transport != null) {
             transports.put(channel, transport);
-            try {
-                timer().add(new EvictSessionTask(channel));
-            } catch (Exception e) {
-                logger.error(String.format("Error occurs while add evict session task for channel %s,  caused by: %s",
-                        Channel.toString(channel.getRemoteAddress()), e.getMessage()), e);
-                throw e;
-            }
+            timer().add(new EvictSessionTask(channel));
         }
     }
 
     /**
      * 删除Channel
      *
-     * @param channel
+     * @param channel 连接通道
      */
     protected void removeChannel(final Channel channel) {
         if (channel != null) {
@@ -466,17 +421,60 @@ public abstract class AbstractServerTransport implements ServerTransport {
         @Override
         public void run() {
             if (channel.isActive()) {
-                try {
-                    channel.evictSession();
-                } catch (Exception e) {
-                    logger.error(
-                            String.format("Error occurs while run evict session task for channel %s,  caused by: %s",
-                                    Channel.toString(channel.getRemoteAddress()), e.getMessage()), e);
-                }
+                channel.evictSession();
                 time = SystemClock.now() + interval;
                 timer().add(this);
             }
         }
     }
 
+    /**
+     * 控制器
+     */
+    protected static class TransportController implements StateController<Channel>, EventHandler<StateEvent> {
+        /**
+         * 通道
+         */
+        protected AbstractServerTransport transport;
+
+        public TransportController(AbstractServerTransport transport) {
+            this.transport = transport;
+        }
+
+        @Override
+        public void handle(final StateEvent event) {
+            switch (event.getType()) {
+                case StateEvent.SUCCESS_OPEN:
+                    logger.info(String.format("Success binding server to %s:%d", transport.host, transport.url.getPort()));
+                    break;
+                case StateEvent.FAIL_OPEN:
+                    logger.error(String.format("Failed binding server to %s:%d", transport.host, transport.url.getPort()));
+                    break;
+                case StateEvent.SUCCESS_CLOSE:
+                    logger.info(String.format("Success destroying server at %s:%d", transport.host, transport.url.getPort()));
+                    break;
+            }
+        }
+
+        @Override
+        public CompletableFuture<Channel> open() {
+            return transport.bind(transport.host, transport.url.getPort()).whenComplete((ch, e) -> {
+                if (e == null) {
+                    transport.serverChannel = (ServerChannel) ch;
+                    transport.publisher.start();
+                }
+            });
+        }
+
+        @Override
+        public CompletableFuture<Channel> close(boolean gracefully) {
+            ServerChannel ch = transport.serverChannel;
+            CompletableFuture<Channel> future = (ch == null ? CompletableFuture.completedFuture(null) : ch.close());
+            return future.whenComplete((c, error) -> {
+                transport.publisher.close();
+                //channel不设置为null，防止正在处理的请求报空指针错误
+                //serverChannel = null;
+            });
+        }
+    }
 }

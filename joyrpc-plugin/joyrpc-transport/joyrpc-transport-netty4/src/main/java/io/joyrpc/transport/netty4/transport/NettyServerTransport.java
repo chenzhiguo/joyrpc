@@ -21,16 +21,16 @@ package io.joyrpc.transport.netty4.transport;
  */
 
 import io.joyrpc.constants.Constants;
-import io.joyrpc.event.AsyncResult;
 import io.joyrpc.exception.ConnectionException;
 import io.joyrpc.extension.URL;
 import io.joyrpc.transport.channel.Channel;
-import io.joyrpc.transport.codec.AdapterContext;
+import io.joyrpc.transport.codec.DeductionContext;
+import io.joyrpc.transport.codec.ProtocolDeduction;
 import io.joyrpc.transport.netty4.channel.NettyChannel;
 import io.joyrpc.transport.netty4.channel.NettyServerChannel;
-import io.joyrpc.transport.netty4.codec.ProtocolAdapterContext;
+import io.joyrpc.transport.netty4.codec.ProtocolDeductionContext;
 import io.joyrpc.transport.netty4.handler.ConnectionChannelHandler;
-import io.joyrpc.transport.netty4.handler.ProtocolAdapterDecoder;
+import io.joyrpc.transport.netty4.handler.ProtocolDeductionAdapter;
 import io.joyrpc.transport.netty4.ssl.SslContextManager;
 import io.joyrpc.transport.transport.AbstractServerTransport;
 import io.joyrpc.transport.transport.ChannelTransport;
@@ -57,9 +57,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
+import static io.joyrpc.transport.codec.ProtocolDeduction.PROTOCOL_DEDUCTION_HANDLER;
 
 /**
  * 服务端
@@ -103,12 +104,13 @@ public class NettyServerTransport extends AbstractServerTransport {
     }
 
     @Override
-    protected void bind(final String host, final int port, final Consumer<AsyncResult<Channel>> consumer) {
+    protected CompletableFuture<Channel> bind(final String host, final int port) {
+        CompletableFuture<Channel> future = new CompletableFuture<>();
         //消费者不会为空
-        if (codec == null && adapter == null) {
-            consumer.accept(new AsyncResult<>(new ConnectionException(
+        if (codec == null && deduction == null) {
+            future.completeExceptionally(new ConnectionException(
                     String.format("Failed binding server at %s:%d, caused by codec or adapter can not be null!",
-                            host, port))));
+                            host, port)));
         } else {
             try {
                 SslContext sslContext = SslContextManager.getServerSslContext(url);
@@ -202,28 +204,28 @@ public class NettyServerTransport extends AbstractServerTransport {
                     bootstrap.bind(new InetSocketAddress(host, port)).addListener((ChannelFutureListener) f -> {
                         NettyServerChannel channel = new NettyServerChannel(f.channel(), bossGroup, workerGroup, supplier);
                         if (f.isSuccess()) {
-                            consumer.accept(new AsyncResult<>(channel));
+                            future.complete(channel);
                         } else {
                             //自动解绑
                             Throwable error = f.cause();
-                            channel.close(o -> consumer.accept(new AsyncResult<>(
-                                    new ConnectionException(
-                                            String.format("Failed binding server at %s:%d, caused by %s",
-                                                    host, port, error.getMessage()), error))));
+                            channel.close().whenComplete((v, e) -> future.completeExceptionally(new ConnectionException(
+                                    String.format("Failed binding server at %s:%d, caused by %s",
+                                            host, port, error.getMessage()), error)));
                         }
                     });
                 }
             } catch (Throwable e) {
-                consumer.accept(new AsyncResult<>(e));
+                future.completeExceptionally(e);
             }
         }
+        return future;
     }
 
     /**
      * 配置
      *
-     * @param bootstrap
-     * @param sslContext
+     * @param bootstrap  启动
+     * @param sslContext ssl上下文
      */
     protected ServerBootstrap configure(final ServerBootstrap bootstrap, final SslContext sslContext) {
         //io.netty.bootstrap.Bootstrap - Unknown channel option 'SO_BACKLOG' for channel
@@ -273,8 +275,8 @@ public class NettyServerTransport extends AbstractServerTransport {
             //及时发送 与 缓存发送
             Channel channel = new NettyChannel(ch, true);
             //设置payload,添加业务线程池到channel
-            channel.setAttribute(Channel.PAYLOAD, url.getPositiveInt(Constants.PAYLOAD))
-                    .setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
+            channel.setAttribute(Channel.PAYLOAD, url.getPositiveInt(Constants.PAYLOAD)).
+                    setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
             if (sslContext != null) {
                 ch.pipeline().addFirst("ssl", sslContext.newHandler(ch.alloc()));
             }
@@ -287,10 +289,10 @@ public class NettyServerTransport extends AbstractServerTransport {
                 }
             });
 
-            if (adapter != null) {
-                ch.pipeline().addLast("adapter", new ProtocolAdapterDecoder(adapter, channel));
+            if (deduction != null) {
+                ch.pipeline().addLast(PROTOCOL_DEDUCTION_HANDLER, new ProtocolDeductionAdapter(deduction, channel));
             } else {
-                AdapterContext context = new ProtocolAdapterContext(channel, ch.pipeline());
+                DeductionContext context = new ProtocolDeductionContext(channel, ch.pipeline());
                 context.bind(codec, chain);
             }
 

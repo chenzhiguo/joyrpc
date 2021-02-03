@@ -20,7 +20,6 @@ package io.joyrpc.transport.netty4.channel;
  * #L%
  */
 
-import io.joyrpc.event.AsyncResult;
 import io.joyrpc.exception.ChannelClosedException;
 import io.joyrpc.exception.LafException;
 import io.joyrpc.exception.OverloadException;
@@ -31,13 +30,13 @@ import io.joyrpc.transport.channel.SendResult;
 import io.joyrpc.transport.message.Message;
 import io.joyrpc.transport.netty4.buffer.NettyChannelBuffer;
 import io.joyrpc.transport.session.SessionManager;
-import io.netty.channel.ChannelFuture;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -112,55 +111,20 @@ public class NettyChannel implements Channel {
     }
 
     @Override
-    public boolean close() {
-        return execute(channel::close);
-    }
-
-    @Override
-    public void close(final Consumer<AsyncResult<Channel>> consumer) {
-        execute(channel::close, consumer);
-    }
-
-    /**
-     * 执行
-     *
-     * @param callable
-     * @return
-     */
-    protected boolean execute(final Callable<ChannelFuture> callable) {
-        ChannelFuture future = null;
+    public CompletableFuture<Channel> close() {
+        CompletableFuture<Channel> future = new CompletableFuture();
         try {
-            future = callable.call();
-            future.await();
-        } catch (InterruptedException e) {
+            channel.close().addListener(f -> {
+                if (f.isSuccess()) {
+                    future.complete(this);
+                } else {
+                    future.completeExceptionally(f.cause());
+                }
+            });
         } catch (Throwable e) {
+            future.completeExceptionally(e);
         }
-        return future != null ? future.isSuccess() : false;
-    }
-
-    /**
-     * 执行
-     *
-     * @param callable 调用
-     * @param consumer 消费者
-     */
-    protected void execute(final Callable<ChannelFuture> callable, final Consumer<AsyncResult<Channel>> consumer) {
-        try {
-            ChannelFuture future = callable.call();
-            if (consumer != null) {
-                future.addListener(f -> {
-                    if (f.isSuccess()) {
-                        consumer.accept(new AsyncResult<>(this));
-                    } else {
-                        consumer.accept(new AsyncResult<>(this, f.cause()));
-                    }
-                });
-            }
-        } catch (Throwable e) {
-            if (consumer != null) {
-                consumer.accept(new AsyncResult<>(this, e));
-            }
-        }
+        return future;
     }
 
     @Override

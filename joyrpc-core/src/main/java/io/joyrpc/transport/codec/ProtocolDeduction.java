@@ -1,4 +1,4 @@
-package io.joyrpc.util;
+package io.joyrpc.transport.codec;
 
 /*-
  * #%L
@@ -20,52 +20,23 @@ package io.joyrpc.util;
  * #L%
  */
 
+import io.joyrpc.transport.buffer.ChannelBuffer;
+
 /**
- * 服务状态
+ * 协议推断
  */
-public enum Status {
-    /**
-     * 关闭
-     */
-    CLOSED {
-        @Override
-        public boolean isClose() {
-            return true;
-        }
-    },
-    /**
-     * 打开中
-     */
-    OPENING,
-    /**
-     * 打开
-     */
-    OPENED,
-    /**
-     * 关闭中
-     */
-    CLOSING {
-        @Override
-        public boolean isClose() {
-            return true;
-        }
-    };
+public interface ProtocolDeduction {
 
     /**
-     * 是否关闭
+     * 协议推断处理器名称
+     */
+    String PROTOCOL_DEDUCTION_HANDLER = "protocolDeduction";
+
+    /**
+     * 推断协议，不会改变连接通道缓冲区读取位置
      *
-     * @return 关闭标识
+     * @param context 上下文
+     * @param buffer  缓冲区
      */
-    public boolean isClose() {
-        return false;
-    }
-
-    /**
-     * 是否在打开
-     * @return 打开标识
-     */
-    public boolean isOpen() {
-        return !isClose();
-    }
-
+    void deduce(DeductionContext context, ChannelBuffer buffer);
 }
