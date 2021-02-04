@@ -30,6 +30,7 @@ import io.joyrpc.transport.telnet.TelnetResponse;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
 
+import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,7 +79,7 @@ public class BizThreadTelnetHandler extends AbstractTelnetHandler {
             export(ServiceManager.getServers(), result);
             return new TelnetResponse(JSON.get().toJSONString(result));
         } else {
-            String port = cmd.getOptionValue("p", String.valueOf(channel.getLocalAddress().getPort()));
+            String port = cmd.getOptionValue("p", String.valueOf(((InetSocketAddress)channel.getLocalAddress()).getPort()));
             int interval = Integer.parseInt(cmd.getOptionValue("i", "1000"));
             int count = Integer.parseInt(cmd.getOptionValue("c", "1"));
             if (interval < 100 || interval > 5000) {
@@ -154,7 +155,7 @@ public class BizThreadTelnetHandler extends AbstractTelnetHandler {
      * @param result
      */
     protected void export(final Server server, final Map<String, Object> result) {
-        export(String.valueOf(server.getLocalAddress().getPort()), server.getBizThreadPool(), result);
+        export(String.valueOf(((InetSocketAddress)server.getLocalAddress()).getPort()), server.getBizThreadPool(), result);
     }
 
     /**

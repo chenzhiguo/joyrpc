@@ -303,7 +303,7 @@ public abstract class AbstractServerTransport implements ServerTransport {
     }
 
     @Override
-    public InetSocketAddress getLocalAddress() {
+    public SocketAddress getLocalAddress() {
         return serverChannel.getLocalAddress();
     }
 

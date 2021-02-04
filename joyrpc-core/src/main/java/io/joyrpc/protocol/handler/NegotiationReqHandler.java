@@ -40,6 +40,7 @@ import io.joyrpc.transport.session.Session;
 import io.joyrpc.transport.transport.ChannelTransport;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.Map;
 
 import static io.joyrpc.Plugin.*;
@@ -99,7 +100,7 @@ public class NegotiationReqHandler extends AbstractNegotiationHandler<Message> i
         session.putAll(attributes);
         //提前绑定Exporter
         session.setExporter(ServiceManager.getExporter(session.getInterfaceName(), session.getAlias(),
-                session.localAddress.getPort()));
+                22002));
         channel.addSession(sessionId, session);
     }
 
@@ -119,11 +120,11 @@ public class NegotiationReqHandler extends AbstractNegotiationHandler<Message> i
         /**
          * 远程地址
          */
-        protected InetSocketAddress remoteAddress;
+        protected SocketAddress remoteAddress;
         /**
          * 本地地址
          */
-        protected InetSocketAddress localAddress;
+        protected SocketAddress localAddress;
         /**
          * 通道
          */
@@ -151,20 +152,20 @@ public class NegotiationReqHandler extends AbstractNegotiationHandler<Message> i
         }
 
         @Override
-        public InetSocketAddress getRemoteAddress() {
+        public SocketAddress getRemoteAddress() {
             return remoteAddress;
         }
 
-        public void setRemoteAddress(InetSocketAddress remoteAddress) {
+        public void setRemoteAddress(SocketAddress remoteAddress) {
             this.remoteAddress = remoteAddress;
         }
 
         @Override
-        public InetSocketAddress getLocalAddress() {
+        public SocketAddress getLocalAddress() {
             return localAddress;
         }
 
-        public void setLocalAddress(InetSocketAddress localAddress) {
+        public void setLocalAddress(SocketAddress localAddress) {
             this.localAddress = localAddress;
         }
 

@@ -29,24 +29,27 @@ import io.joyrpc.transport.channel.ChannelManager.Connector;
 import io.joyrpc.transport.heartbeat.HeartbeatStrategy.HeartbeatMode;
 import io.joyrpc.transport.netty4.binder.HandlerBinder;
 import io.joyrpc.transport.netty4.channel.NettyClientChannel;
+import io.joyrpc.transport.netty4.channel.NettyQuicClientChannel;
+import io.joyrpc.transport.netty4.channel.NettyQuicStreamClientChannel;
 import io.joyrpc.transport.netty4.handler.ConnectionChannelHandler;
 import io.joyrpc.transport.netty4.handler.IdleHeartbeatHandler;
 import io.joyrpc.transport.netty4.ssl.SslContextManager;
 import io.joyrpc.transport.transport.AbstractClientTransport;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.epoll.EpollSocketChannel;
+import io.netty.channel.socket.ChannelInputShutdownReadComplete;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.proxy.Socks5ProxyHandler;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.incubator.codec.quic.*;
 import io.netty.util.CharsetUtil;
-import io.netty.util.NetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,16 +96,9 @@ public class NettyClientTransport extends AbstractClientTransport {
                 SslContext sslContext = SslContextManager.getClientSslContext(url);
                 //TODO 考虑根据不同的参数，创建不同的连接
                 if (true) {
-                    byte[] proto = new byte[] {
-                            0x05, 'h', 'q', '-', '2', '9',
-                            0x05, 'h', 'q', '-', '2', '8',
-                            0x05, 'h', 'q', '-', '2', '7',
-                            0x08, 'h', 't', 't', 'p', '/', '0', '.', '9'
-                    };
-                    ChannelHandler quicChannelHandler = new QuicClientCodecBuilder()
-                            // .certificateChain("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.crt")
-                            // .privateKey("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.key")
-                            .applicationProtocols(proto)
+                    QuicSslContext context = QuicSslContextBuilder.forClient().trustManager(InsecureTrustManagerFactory.INSTANCE).
+                            applicationProtocols("http/0.9").build();
+                    ChannelHandler quicChannelHandler = new QuicClientCodecBuilder().sslContext(context)
                             .maxIdleTimeout(5000, TimeUnit.MILLISECONDS)
                             // .maxUdpPayloadSize(Quic.MAX_DATAGRAM_SIZE)
                             .initialMaxData(10000000)
@@ -116,6 +112,17 @@ public class NettyClientTransport extends AbstractClientTransport {
                     io.netty.channel.Channel channel = bs.group(ioGroups[0])
                             .channel(NioDatagramChannel.class)
                             .handler(quicChannelHandler)
+                            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, url.getPositiveInt(Constants.CONNECT_TIMEOUT_OPTION))
+                            .
+                            //option(ChannelOption.SO_TIMEOUT, url.getPositiveInt(Constants.SO_TIMEOUT_OPTION)).
+                            //         option(ChannelOption.TCP_NODELAY, url.getBoolean(TCP_NODELAY)).
+                            //         option(ChannelOption.SO_KEEPALIVE, url.getBoolean(Constants.SO_KEEPALIVE_OPTION)).
+                                    option(ChannelOption.ALLOCATOR, BufAllocator.create(url)).
+                                    option(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                                            new WriteBufferWaterMark(
+                                                    url.getPositiveInt(Constants.WRITE_BUFFER_LOW_WATERMARK_OPTION),
+                                                    url.getPositiveInt(Constants.WRITE_BUFFER_HIGH_WATERMARK_OPTION))).
+                                    option(ChannelOption.RCVBUF_ALLOCATOR, AdaptiveRecvByteBufAllocator.DEFAULT)
                             .bind(0)
                             // .addListener((ChannelFutureListener) f -> {
                             //     if (f.isSuccess()) {
@@ -127,12 +134,155 @@ public class NettyClientTransport extends AbstractClientTransport {
                             // })
                             .sync().channel();
 
-                    QuicChannel quicChannel = QuicChannel.newBootstrap(channel)
-                    //         .handler(new ChannelInitializer<io.netty.channel.Channel>() {
+                    QuicChannel.newBootstrap(channel)
+                            .handler(new ChannelInitializer<io.netty.channel.Channel>() {
+                                @Override
+                                protected void initChannel(final io.netty.channel.Channel ch) {
+                                    try {
+                                        //及时发送 与 缓存发送
+                                        channels[0] = new NettyQuicClientChannel(ch, ioGroups[0], quicChannel -> {
+                                            try {
+                                                return ((QuicChannel)quicChannel).createStream(QuicStreamType.BIDIRECTIONAL,
+                                                        new ChannelInitializer<io.netty.channel.Channel>() {
+                                                            @Override
+                                                            protected void initChannel(final io.netty.channel.Channel ch) {
+                                                                try {
+                                                                    Channel streamChannel = new NettyQuicStreamClientChannel(ch, ioGroups[0]);
+                                                                    //设置
+                                                                    streamChannel.
+                                                                            setAttribute(Channel.PAYLOAD, url.getPositiveInt(Constants.PAYLOAD)).
+                                                                            setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
+                                                                    //添加连接事件监听
+                                                                    ch.pipeline().addLast("connection", new ConnectionChannelHandler(streamChannel, publisher));
+                                                                    //添加编解码和处理链
+                                                                    HandlerBinder binder = Plugin.HANDLER_BINDER.get(codec.binder());
+                                                                    binder.bind(ch.pipeline(), codec, handlerChain, streamChannel);
+                                                                    //若配置idle心跳策略，配置心跳handler
+                                                                    if (heartbeatStrategy != null && heartbeatStrategy.getHeartbeatMode() == HeartbeatMode.IDLE) {
+                                                                        ch.pipeline().
+                                                                                addLast("idleState", new IdleStateHandler(0, heartbeatStrategy.getInterval(), 0, TimeUnit.MILLISECONDS)).
+                                                                                addLast("idleHeartbeat", new IdleHeartbeatHandler());
+                                                                    }
+                                                                    if (sslContext != null) {
+                                                                        ch.pipeline().addFirst("ssl", sslContext.newHandler(ch.alloc()));
+                                                                    }
+                                                                    //若开启了ss5代理，添加ss5
+                                                                    if (url.getBoolean(SS5_ENABLE)) {
+                                                                        String host = url.getString(SS5_HOST);
+                                                                        if (host != null && !host.isEmpty()) {
+                                                                            InetSocketAddress ss5Address = new InetSocketAddress(host, url.getInteger(SS5_PORT));
+                                                                            ch.pipeline().addFirst("ss5", new Socks5ProxyHandler(ss5Address, url.getString(SS5_USER), url.getString(SS5_PASSWORD)));
+                                                                        }
+                                                                    }
+                                                                } catch (Exception e) {
+                                                                    logger.error("Error:", e);
+                                                                }
+                                                            }
+                                                        }).sync().getNow();
+                                            } catch (InterruptedException e) {
+                                                e.printStackTrace();
+                                            }
+                                            return null;
+                                        }
+                                        );
+                                        //设置
+                                        channels[0].
+                                                setAttribute(Channel.PAYLOAD, url.getPositiveInt(PAYLOAD)).
+                                                setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
+                                        //添加连接事件监听
+                                        // ch.pipeline().addLast("connection", new ConnectionChannelHandler(channels[0], publisher));
+                                        //添加编解码和处理链
+                                        // HandlerBinder binder = Plugin.HANDLER_BINDER.get(codec.binder());
+                                        // binder.bind(ch.pipeline(), codec, handlerChain, channels[0]);
+                                        //若配置idle心跳策略，配置心跳handler
+                                        // if (heartbeatStrategy != null && heartbeatStrategy.getHeartbeatMode() == HeartbeatMode.IDLE) {
+                                        //     ch.pipeline().
+                                        //             addLast("idleState", new IdleStateHandler(0, heartbeatStrategy.getInterval(), 0, TimeUnit.MILLISECONDS)).
+                                        //             addLast("idleHeartbeat", new IdleHeartbeatHandler());
+                                        // }
+                                        // if (sslContext != null) {
+                                        //     ch.pipeline().addFirst("ssl", sslContext.newHandler(ch.alloc()));
+                                        // }
+                                        // //若开启了ss5代理，添加ss5
+                                        // if (url.getBoolean(SS5_ENABLE)) {
+                                        //     String host = url.getString(SS5_HOST);
+                                        //     if (host != null && !host.isEmpty()) {
+                                        //         InetSocketAddress ss5Address = new InetSocketAddress(host, url.getInteger(SS5_PORT));
+                                        //         ch.pipeline().addFirst("ss5", new Socks5ProxyHandler(ss5Address, url.getString(SS5_USER), url.getString(SS5_PASSWORD)));
+                                        //     }
+                                        // }
+                                    } catch (Exception e) {
+                                        logger.error("Error:", e);
+                                    }
+                                }
+                            })
+                            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, url.getPositiveInt(CONNECT_TIMEOUT_OPTION)).
+                            //option(ChannelOption.SO_TIMEOUT, url.getPositiveInt(Constants.SO_TIMEOUT_OPTION)).
+                            //         option(ChannelOption.TCP_NODELAY, url.getBoolean(TCP_NODELAY)).
+                            //         option(ChannelOption.SO_KEEPALIVE, url.getBoolean(SO_KEEPALIVE_OPTION)).
+                                    option(ChannelOption.ALLOCATOR, BufAllocator.create(url)).
+                                    option(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                                            new WriteBufferWaterMark(
+                                                    url.getPositiveInt(WRITE_BUFFER_LOW_WATERMARK_OPTION),
+                                                    url.getPositiveInt(WRITE_BUFFER_HIGH_WATERMARK_OPTION))).
+                                    option(ChannelOption.RCVBUF_ALLOCATOR, AdaptiveRecvByteBufAllocator.DEFAULT)
+                            // .streamHandler(new ChannelInboundHandlerAdapter() {
+                            //     @Override
+                            //     public void channelActive(ChannelHandlerContext ctx) {
+                            //         // We don't want to handle streams created by the server side, just close the
+                            //         // stream and so send a fin.
+                            //         ctx.close();
+                            //     }
+                            //
+                            //     @Override
+                            //     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                            //         super.channelInactive(ctx);
+                            //         ((QuicChannel) ctx.channel().parent()).close(true, 0,
+                            //                 ctx.alloc().directBuffer(16)
+                            //                         .writeBytes(new byte[]{'k', 't', 'h', 'x', 'b', 'y', 'e'}));
+                            //     }
+                            // })
+                            .remoteAddress(new InetSocketAddress(url.getHost(), url.getPort()))
+                            .connect()
+                            .addListener(future -> {
+                                if (future.isSuccess()) {
+                                    myConsumer.accept(new AsyncResult<>(channels[0]));
+                                } else {
+                                    logger.error("Error:", future.cause());
+                                    myConsumer.accept(new AsyncResult<>(new NettyClientChannel((io.netty.channel.Channel) future.getNow(), ioGroups[0]), error(future.cause())));
+                                }
+                            })
+                            // .addListener((ChannelFutureListener) f -> {
+                            //     if (f.isSuccess()) {
+                            //         myConsumer.accept(new AsyncResult<>(channels[0]));
+                            //     } else {
+                            //         logger.error("Error:", f.cause());
+                            //         myConsumer.accept(new AsyncResult<>(new NettyClientChannel(f.channel(), ioGroups[0]), error(f.cause())));
+                            //     }
+                            // })
+                            .get();
+
+                    // QuicStreamChannel streamChannel = quicChannel.createStream(QuicStreamType.BIDIRECTIONAL,
+                    //         new ChannelInboundHandlerAdapter() {
+                    //             @Override
+                    //             public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                    //                 ByteBuf byteBuf = (ByteBuf) msg;
+                    //                 System.err.println(byteBuf.toString(CharsetUtil.US_ASCII));
+                    //                 byteBuf.release();
+                    //             }
+                    //
+                    //             @Override
+                    //             public void channelInactive(ChannelHandlerContext ctx) {
+                    //                 // Close the connection once the remote peer did close this stream.
+                    //                 ((QuicChannel) ctx.channel().parent()).close(true, 0,
+                    //                         ctx.alloc().directBuffer(16)
+                    //                                 .writeBytes(new byte[]{'k', 't', 'h', 'x', 'b', 'y', 'e'}));
+                    //             }
+                    //         }
+                    // new ChannelInitializer<io.netty.channel.Channel>() {
                     //     @Override
                     //     protected void initChannel(final io.netty.channel.Channel ch) {
                     //         try {
-                    //
                     //             //及时发送 与 缓存发送
                     //             channels[0] = new NettyClientChannel(ch, ioGroups[0]);
                     //             //设置
@@ -165,99 +315,17 @@ public class NettyClientTransport extends AbstractClientTransport {
                     //             logger.error("Error:", e);
                     //         }
                     //     }
-                    // })
-                            .streamHandler(new ChannelInboundHandlerAdapter() {
-                                @Override
-                                public void channelActive(ChannelHandlerContext ctx) {
-                                    // We don't want to handle streams created by the server side, just close the
-                                    // stream and so send a fin.
-                                    ctx.close();
-                                }
-                            })
-                            .remoteAddress(new InetSocketAddress(url.getHost(), url.getPort()))
-                            .connect()
-                            // .addListener(future -> {
-                            //     if (future.isSuccess()) {
-                            //         myConsumer.accept(new AsyncResult<>(channels[0]));
-                            //     } else {
-                            //         logger.error("Error:", future.cause());
-                            //         myConsumer.accept(new AsyncResult<>(new NettyClientChannel((io.netty.channel.Channel) future.getNow(), ioGroups[0]), error(future.cause())));
-                            //     }
-                            // })
-                            // .addListener((ChannelFutureListener) f -> {
-                            //     if (f.isSuccess()) {
-                            //         myConsumer.accept(new AsyncResult<>(channels[0]));
-                            //     } else {
-                            //         logger.error("Error:", f.cause());
-                            //         myConsumer.accept(new AsyncResult<>(new NettyClientChannel(f.channel(), ioGroups[0]), error(f.cause())));
-                            //     }
-                            // })
-                            .get();
-
-                    QuicStreamChannel streamChannel = quicChannel.createStream(QuicStreamType.BIDIRECTIONAL,
-                            // new ChannelInboundHandlerAdapter() {
-                            //     @Override
-                            //     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                            //         ByteBuf byteBuf = (ByteBuf) msg;
-                            //         System.err.println(byteBuf.toString(CharsetUtil.US_ASCII));
-                            //         byteBuf.release();
-                            //     }
-                            //
-                            //     @Override
-                            //     public void channelInactive(ChannelHandlerContext ctx) {
-                            //         // Close the connection once the remote peer did close this stream.
-                            //         ((QuicChannel) ctx.channel().parent()).close(true, 0,
-                            //                 ctx.alloc().directBuffer(16)
-                            //                         .writeBytes(new byte[]{'k', 't', 'h', 'x', 'b', 'y', 'e'}));
-                            //     }
-                            // }
-                            new ChannelInitializer<io.netty.channel.Channel>() {
-                                @Override
-                                protected void initChannel(final io.netty.channel.Channel ch) {
-                                    try {
-                                        //及时发送 与 缓存发送
-                                        channels[0] = new NettyClientChannel(ch, ioGroups[0]);
-                                        //设置
-                                        channels[0].
-                                                setAttribute(Channel.PAYLOAD, url.getPositiveInt(Constants.PAYLOAD)).
-                                                setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
-                                        //添加连接事件监听
-                                        ch.pipeline().addLast("connection", new ConnectionChannelHandler(channels[0], publisher));
-                                        //添加编解码和处理链
-                                        HandlerBinder binder = Plugin.HANDLER_BINDER.get(codec.binder());
-                                        binder.bind(ch.pipeline(), codec, handlerChain, channels[0]);
-                                        //若配置idle心跳策略，配置心跳handler
-                                        if (heartbeatStrategy != null && heartbeatStrategy.getHeartbeatMode() == HeartbeatMode.IDLE) {
-                                            ch.pipeline().
-                                                    addLast("idleState", new IdleStateHandler(0, heartbeatStrategy.getInterval(), 0, TimeUnit.MILLISECONDS)).
-                                                    addLast("idleHeartbeat", new IdleHeartbeatHandler());
-                                        }
-                                        if (sslContext != null) {
-                                            ch.pipeline().addFirst("ssl", sslContext.newHandler(ch.alloc()));
-                                        }
-                                        //若开启了ss5代理，添加ss5
-                                        if (url.getBoolean(SS5_ENABLE)) {
-                                            String host = url.getString(SS5_HOST);
-                                            if (host != null && !host.isEmpty()) {
-                                                InetSocketAddress ss5Address = new InetSocketAddress(host, url.getInteger(SS5_PORT));
-                                                ch.pipeline().addFirst("ss5", new Socks5ProxyHandler(ss5Address, url.getString(SS5_USER), url.getString(SS5_PASSWORD)));
-                                            }
-                                        }
-                                    } catch (Exception e) {
-                                        logger.error("Error:", e);
-                                    }
-                                }
-                            }
-                            )
-                            .addListener(future -> {
-                                if (future.isSuccess()) {
-                                    myConsumer.accept(new AsyncResult<>(channels[0]));
-                                } else {
-                                    logger.error("Error:", future.cause());
-                                    myConsumer.accept(new AsyncResult<>(new NettyClientChannel((io.netty.channel.Channel) future.getNow(), ioGroups[0]), error(future.cause())));
-                                }
-                            }
-                    ).sync().getNow();
+                    // }
+                    //         )
+                    //         .addListener(future -> {
+                    //             if (future.isSuccess()) {
+                    //                 myConsumer.accept(new AsyncResult<>(channels[0]));
+                    //             } else {
+                    //                 logger.error("Error:", future.cause());
+                    //                 myConsumer.accept(new AsyncResult<>(new NettyClientChannel((io.netty.channel.Channel) future.getNow(), ioGroups[0]), error(future.cause())));
+                    //             }
+                    //         }
+                    // ).sync().getNow();
                     // ByteBuf buffer = Unpooled.directBuffer();
                     // buffer.writeCharSequence("GET /\r\n", CharsetUtil.US_ASCII);
                     // streamChannel.writeAndFlush(buffer);

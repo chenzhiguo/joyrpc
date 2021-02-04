@@ -58,7 +58,7 @@ public class MockCoverChannelHandler implements ChannelHandler {
         if (message instanceof MockMessage && ((MockMessage) message).isRequest()) {
             MockMessage mockMsg = (MockMessage) message;
             Http2RequestMessage http2ReqMsg = new DefaultHttp2RequestMessage(0, mockMsg.getMsgId(), mockMsg.getPayLoad());
-            InetSocketAddress remoteAddress = context.getChannel().getRemoteAddress();
+            InetSocketAddress remoteAddress = (InetSocketAddress) context.getChannel().getRemoteAddress();
             http2ReqMsg.headers().authority(new AsciiString(remoteAddress.getHostName() + ":" + remoteAddress.getPort()));
             http2ReqMsg.headers().scheme(AsciiString.of("http"));
             http2ReqMsg.headers().add("user-agent", new AsciiString("joyrpc/2.0"));

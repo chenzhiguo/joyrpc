@@ -55,7 +55,8 @@ public class NettyTransportFactory implements TransportFactory {
 
     @Override
     public ChannelTransport createChannelTransport(final Channel channel, final URL url) {
-        return new DefaultChannelTransport(channel, url);
+        // if (url.)
+        return new QuicChannelTransport(channel, url);
     }
 
 }

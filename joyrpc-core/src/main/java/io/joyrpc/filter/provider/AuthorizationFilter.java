@@ -40,6 +40,7 @@ import io.joyrpc.protocol.message.authentication.AuthenticationRequest;
 import io.joyrpc.transport.session.Session;
 import io.joyrpc.util.network.Ipv4;
 
+import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -87,8 +88,8 @@ public class AuthorizationFilter extends AbstractProviderFilter {
                             new AuthenticationException(
                                     String.format(ERROR, "Error occurs while authenticating.",
                                             invocation.getClassName(), invocation.getMethodName(),
-                                            Ipv4.toIp(request.getRemoteAddress()),
-                                            Ipv4.toIp(request.getLocalAddress())),
+                                            Ipv4.toIp((InetSocketAddress) request.getRemoteAddress()),
+                                            Ipv4.toIp((InetSocketAddress) request.getLocalAddress())),
                                     e, ExceptionCode.PROVIDER_AUTH_FAIL)));
                 }
             }
@@ -98,8 +99,8 @@ public class AuthorizationFilter extends AbstractProviderFilter {
                     new AuthenticationException(
                             String.format(ERROR, "Authentication is not passed", invocation.getClassName(),
                                     invocation.getMethodName(),
-                                    Ipv4.toIp(request.getRemoteAddress()),
-                                    Ipv4.toIp(request.getLocalAddress())),
+                                    Ipv4.toIp((InetSocketAddress) request.getRemoteAddress()),
+                                    Ipv4.toIp((InetSocketAddress) request.getLocalAddress())),
                             ExceptionCode.PROVIDER_AUTH_FAIL)));
         }
         Authorization authorization = request.getAuthorization();
@@ -110,8 +111,8 @@ public class AuthorizationFilter extends AbstractProviderFilter {
                     new AuthorizationException(
                             String.format(ERROR, "No authorization",
                                     invocation.getClassName(), invocation.getMethodName(),
-                                    Ipv4.toIp(request.getRemoteAddress()),
-                                    Ipv4.toIp(request.getLocalAddress())),
+                                    Ipv4.toIp((InetSocketAddress) request.getRemoteAddress()),
+                                    Ipv4.toIp((InetSocketAddress) request.getLocalAddress())),
                             ExceptionCode.PROVIDER_AUTH_FAIL, null)));
         }
         return invoker.invoke(request);

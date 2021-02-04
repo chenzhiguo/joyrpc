@@ -51,7 +51,7 @@ public class IPPermissionFilter extends AbstractProviderFilter {
         IPPermission permission = option.getIPPermission();
         if (permission != null) {
             //开启了IP访问控制
-            InetSocketAddress remoteAddress = request.getRemoteAddress();
+            InetSocketAddress remoteAddress = (InetSocketAddress) request.getRemoteAddress();
             String remoteIp = Ipv4.toIp(remoteAddress);
             if (!Ipv4.isLocalIp(remoteIp)) {
                 //只有非本地地址才开启IP访问过滤

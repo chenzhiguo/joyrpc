@@ -27,6 +27,7 @@ import io.joyrpc.transport.codec.Codec;
 import io.joyrpc.util.State;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -54,7 +55,7 @@ public interface Endpoint {
      *
      * @return
      */
-    InetSocketAddress getLocalAddress();
+    SocketAddress getLocalAddress();
 
     /**
      * 获取当前状态

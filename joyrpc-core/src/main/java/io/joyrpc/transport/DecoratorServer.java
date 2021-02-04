@@ -32,6 +32,7 @@ import io.joyrpc.transport.transport.ServerTransport;
 import io.joyrpc.util.State;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -128,7 +129,7 @@ public class DecoratorServer<T extends ServerTransport> implements Server {
     }
 
     @Override
-    public InetSocketAddress getLocalAddress() {
+    public SocketAddress getLocalAddress() {
         return transport.getLocalAddress();
     }
 

@@ -36,6 +36,7 @@ import io.joyrpc.transport.transport.ClientTransport;
 import io.joyrpc.util.State;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -119,12 +120,12 @@ public class DecoratorClient<T extends ClientTransport> implements Client {
 
     @Override
     public InetSocketAddress getRemoteAddress() {
-        return transport.getRemoteAddress();
+        return (InetSocketAddress)transport.getRemoteAddress();
     }
 
     @Override
     public InetSocketAddress getLocalAddress() {
-        return transport.getLocalAddress();
+        return (InetSocketAddress)transport.getLocalAddress();
     }
 
     @Override

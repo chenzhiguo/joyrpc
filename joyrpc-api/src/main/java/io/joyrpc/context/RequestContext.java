@@ -22,6 +22,7 @@ package io.joyrpc.context;
 
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -83,12 +84,12 @@ public class RequestContext {
     /**
      * The Local address.
      */
-    protected InetSocketAddress localAddress;
+    protected SocketAddress localAddress;
 
     /**
      * The Remote address.
      */
-    protected InetSocketAddress remoteAddress;
+    protected SocketAddress remoteAddress;
 
     /**
      * The Provider side.
@@ -235,7 +236,7 @@ public class RequestContext {
      * @param address the address
      * @return context local address
      */
-    public RequestContext setLocalAddress(final InetSocketAddress address) {
+    public RequestContext setLocalAddress(final SocketAddress address) {
         this.localAddress = address;
         return this;
     }
@@ -245,7 +246,7 @@ public class RequestContext {
      *
      * @return local address
      */
-    public InetSocketAddress getLocalAddress() {
+    public SocketAddress getLocalAddress() {
         return localAddress;
     }
 
@@ -255,7 +256,7 @@ public class RequestContext {
      * @param address the address
      * @return context remote address
      */
-    public RequestContext setRemoteAddress(final InetSocketAddress address) {
+    public RequestContext setRemoteAddress(final SocketAddress address) {
         this.remoteAddress = address;
         return this;
     }
@@ -265,7 +266,7 @@ public class RequestContext {
      *
      * @return remote address
      */
-    public InetSocketAddress getRemoteAddress() {
+    public SocketAddress getRemoteAddress() {
         return remoteAddress;
     }
 

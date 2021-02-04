@@ -27,6 +27,8 @@ import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.codec.DeductionContext;
 import io.joyrpc.transport.codec.ProtocolDeduction;
 import io.joyrpc.transport.netty4.channel.NettyChannel;
+import io.joyrpc.transport.netty4.channel.NettyQuicChannel;
+import io.joyrpc.transport.netty4.channel.NettyQuicServerChannel;
 import io.joyrpc.transport.netty4.channel.NettyServerChannel;
 import io.joyrpc.transport.netty4.codec.ProtocolDeductionContext;
 import io.joyrpc.transport.netty4.handler.ConnectionChannelHandler;
@@ -44,10 +46,8 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
-import io.netty.incubator.codec.quic.InsecureQuicTokenHandler;
-import io.netty.incubator.codec.quic.Quic;
-import io.netty.incubator.codec.quic.QuicChannel;
-import io.netty.incubator.codec.quic.QuicServerCodecBuilder;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.incubator.codec.quic.*;
 import io.netty.util.CharsetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +56,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -74,6 +75,8 @@ public class NettyServerTransport extends AbstractServerTransport {
     protected final Supplier<List<Channel>> supplier = this::getChannels;
 
     private static final Logger logger = LoggerFactory.getLogger(NettyServerTransport.class);
+
+    protected static final AtomicBoolean opened = new AtomicBoolean(false);
 
     /**
      * 构造函数
@@ -118,16 +121,11 @@ public class NettyServerTransport extends AbstractServerTransport {
                 EventLoopGroup workerGroup = EventLoopGroupFactory.getWorkerGroup(url);
                 // if (url.getBoolean("quic")) {
                 if (true) {
-                    byte[] proto = new byte[] {
-                            0x05, 'h', 'q', '-', '2', '9',
-                            0x05, 'h', 'q', '-', '2', '8',
-                            0x05, 'h', 'q', '-', '2', '7',
-                            0x08, 'h', 't', 't', 'p', '/', '0', '.', '9'
-                    };
-                    ChannelHandler channelHandler = new QuicServerCodecBuilder()
-                            .certificateChain("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.crt")
-                            .privateKey("/Users/Silence/Projects/joyrpc/joyrpc-plugin/joyrpc-transport/joyrpc-transport-netty4/src/main/resources/cert.key")
-                            .applicationProtocols(proto)
+                    SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate();
+                    QuicSslContext context = QuicSslContextBuilder.forServer(
+                            selfSignedCertificate.privateKey(), null, selfSignedCertificate.certificate())
+                            .applicationProtocols("http/0.9").build();
+                    ChannelHandler channelHandler = new QuicServerCodecBuilder().sslContext(context)
                             .maxIdleTimeout(5000, TimeUnit.MILLISECONDS)
                             // .maxUdpPayloadSize(Quic.MAX_DATAGRAM_SIZE)
                             .initialMaxData(10000000)
@@ -136,12 +134,20 @@ public class NettyServerTransport extends AbstractServerTransport {
                             .initialMaxStreamsBidirectional(100)
                             .initialMaxStreamsUnidirectional(100)
                             .tokenHandler(InsecureQuicTokenHandler.INSTANCE)
+                            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, url.getPositiveInt(Constants.CONNECT_TIMEOUT_OPTION))
+                            // .option(ChannelOption.SO_REUSEADDR, url.getBoolean(Constants.SO_REUSE_PORT_OPTION))
+                            // .option(ChannelOption.SO_BACKLOG, url.getPositiveInt(Constants.SO_BACKLOG_OPTION))
+                            .option(ChannelOption.RCVBUF_ALLOCATOR, AdaptiveRecvByteBufAllocator.DEFAULT)
+                            .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(url.getPositiveInt(Constants.WRITE_BUFFER_LOW_WATERMARK_OPTION),
+                                    url.getPositiveInt(Constants.WRITE_BUFFER_HIGH_WATERMARK_OPTION)))
                             // ChannelHandler that is added into QuicChannel pipeline.
                             .handler(new ChannelInboundHandlerAdapter() {
                                 @Override
                                 public void channelActive(ChannelHandlerContext ctx) {
                                     QuicChannel channel = (QuicChannel) ctx.channel();
                                     // Create streams etc..
+                                    // NettyQuicServerChannel serverChannel = new NettyQuicServerChannel(channel, bossGroup, workerGroup, supplier);
+                                    // consumer.accept(new AsyncResult<>(serverChannel));
                                 }
 
                                 @Override
@@ -155,49 +161,64 @@ public class NettyServerTransport extends AbstractServerTransport {
                                     return true;
                                 }
                             })
-                            .streamHandler(new ChannelInboundHandlerAdapter() {
-                                @Override
-                                public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                                    ByteBuf byteBuf = (ByteBuf) msg;
-                                    try {
-                                        if (byteBuf.toString(CharsetUtil.US_ASCII).trim().equals("GET /")) {
-                                            ByteBuf buffer = ctx.alloc().directBuffer();
-                                            buffer.writeCharSequence("Hello World!\r\n", CharsetUtil.US_ASCII);
-
-                                            // Write the buffer and close the stream once the write completes.
-                                            ctx.writeAndFlush(buffer).addListener(ChannelFutureListener.CLOSE);
-                                        }
-                                    } finally {
-                                        byteBuf.release();
-                                    }
-                                }
-
-                                @Override
-                                public boolean isSharable() {
-                                    return true;
-                                }
-                            })
+                            .streamHandler(new MyQuicChannelInitializer(url, sslContext))
+                            // .streamHandler(new ChannelInboundHandlerAdapter() {
+                            //     @Override
+                            //     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                            //         ByteBuf byteBuf = (ByteBuf) msg;
+                            //         try {
+                            //             if (byteBuf.toString(CharsetUtil.US_ASCII).trim().equals("GET /")) {
+                            //                 ByteBuf buffer = ctx.alloc().directBuffer();
+                            //                 buffer.writeCharSequence("Hello World!\r\n", CharsetUtil.US_ASCII);
+                            //
+                            //                 // Write the buffer and close the stream once the write completes.
+                            //                 ctx.writeAndFlush(buffer).addListener(ChannelFutureListener.CLOSE);
+                            //             }
+                            //         } finally {
+                            //             byteBuf.release();
+                            //         }
+                            //     }
+                            //
+                            //     @Override
+                            //     public boolean isSharable() {
+                            //         return true;
+                            //     }
+                            // })
                             .build();
                     Bootstrap bootstrap = new Bootstrap();
-                    // io.netty.channel.Channel channel1 =
-                            bootstrap.group(bossGroup).channel(NioDatagramChannel.class).handler(channelHandler)
-                            .bind(new InetSocketAddress(port))
+                    io.netty.channel.Channel channel1 =
+                            bootstrap.group(bossGroup)
+                                    .channel(NioDatagramChannel.class)
+                                    .handler(channelHandler)
+                                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, url.getPositiveInt(Constants.CONNECT_TIMEOUT_OPTION))
+                                    .option(ChannelOption.SO_REUSEADDR, url.getBoolean(Constants.SO_REUSE_PORT_OPTION))
+                                    .option(ChannelOption.SO_BACKLOG, url.getPositiveInt(Constants.SO_BACKLOG_OPTION))
+                                    .option(ChannelOption.RCVBUF_ALLOCATOR, AdaptiveRecvByteBufAllocator.DEFAULT)
+                                    .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(url.getPositiveInt(Constants.WRITE_BUFFER_LOW_WATERMARK_OPTION),
+                                            url.getPositiveInt(Constants.WRITE_BUFFER_HIGH_WATERMARK_OPTION)))
+                                    // .childOption(ChannelOption.SO_RCVBUF, url.getPositiveInt(Constants.SO_RECEIVE_BUF_OPTION))
+                                    // .childOption(ChannelOption.SO_SNDBUF, url.getPositiveInt(Constants.SO_SEND_BUF_OPTION))
+                                    // .childOption(ChannelOption.SO_KEEPALIVE, url.getBoolean(Constants.SO_KEEPALIVE_OPTION))
+                                    // .childOption(ChannelOption.TCP_NODELAY, url.getBoolean(Constants.TCP_NODELAY))
+                                    // .childOption(ChannelOption.ALLOCATOR, BufAllocator.create(url))
+                                    .bind(new InetSocketAddress(port))
                                     .addListener((ChannelFutureListener) f -> {
-                                NettyServerChannel channel = new NettyServerChannel(f.channel(), bossGroup, workerGroup, supplier);
-                                if (f.isSuccess()) {
-                                    consumer.accept(new AsyncResult<>(channel));
-                                } else {
-                                    //自动解绑
-                                    logger.error("Error:", f.cause());
-                                    Throwable error = f.cause();
-                                    channel.close(o -> consumer.accept(new AsyncResult<>(
-                                            new ConnectionException(
-                                                    String.format("Failed binding server at %s:%d, caused by %s",
-                                                            host, port, error.getMessage()), error))));
+                                                NettyQuicServerChannel channel = new NettyQuicServerChannel(f.channel(), bossGroup, workerGroup, supplier);
+                                                if (f.isSuccess()) {
+                                                    consumer.accept(new AsyncResult<>(channel));
+                                                } else {
+                                                    //自动解绑
+                                                    logger.error("Error:", f.cause());
+                                                    Throwable error = f.cause();
+                                                    channel.close(o -> consumer.accept(new AsyncResult<>(
+                                                            new ConnectionException(
+                                                                    String.format("Failed binding server at %s:%d, caused by %s",
+                                                                            host, port, error.getMessage()), error))));
 
-                                }
-                            }
-                    ).sync().channel();
+                                                }
+                                            }
+                                    )
+                                    .sync().channel();
                     // channel1.closeFuture().sync();
                 } else {
                     ServerBootstrap bootstrap = configure(new ServerBootstrap().group(bossGroup, workerGroup), sslContext);
@@ -239,8 +260,8 @@ public class NettyServerTransport extends AbstractServerTransport {
                         url.getPositiveInt(Constants.WRITE_BUFFER_HIGH_WATERMARK_OPTION)))
                 .childOption(ChannelOption.SO_RCVBUF, url.getPositiveInt(Constants.SO_RECEIVE_BUF_OPTION))
                 .childOption(ChannelOption.SO_SNDBUF, url.getPositiveInt(Constants.SO_SEND_BUF_OPTION))
-                .childOption(ChannelOption.SO_KEEPALIVE, url.getBoolean(Constants.SO_KEEPALIVE_OPTION))
-                .childOption(ChannelOption.TCP_NODELAY, url.getBoolean(Constants.TCP_NODELAY))
+                // .childOption(ChannelOption.SO_KEEPALIVE, url.getBoolean(Constants.SO_KEEPALIVE_OPTION))
+                // .childOption(ChannelOption.TCP_NODELAY, url.getBoolean(Constants.TCP_NODELAY))
                 .childOption(ChannelOption.ALLOCATOR, BufAllocator.create(url));
 
         return bootstrap;
@@ -302,5 +323,61 @@ public class NettyServerTransport extends AbstractServerTransport {
             addChannel(channel, transport);
         }
     }
+
+    protected class MyQuicChannelInitializer extends ChannelInitializer<io.netty.channel.Channel> {
+        /**
+         * URL
+         */
+        protected URL url;
+        /**
+         * SSL上下文
+         */
+        protected SslContext sslContext;
+
+        /**
+         * 构造函数
+         *
+         * @param url
+         * @param sslContext
+         */
+        public MyQuicChannelInitializer(URL url, SslContext sslContext) {
+            this.url = url;
+            this.sslContext = sslContext;
+        }
+
+        @Override
+        protected void initChannel(final io.netty.channel.Channel ch) {
+            //及时发送 与 缓存发送
+            Channel channel = new NettyQuicChannel(ch, true, null);
+            //设置payload,添加业务线程池到channel
+            channel.setAttribute(Channel.PAYLOAD, url.getPositiveInt(Constants.PAYLOAD))
+                    .setAttribute(Channel.BIZ_THREAD_POOL, bizThreadPool, (k, v) -> v != null);
+            if (sslContext != null) {
+                ch.pipeline().addFirst("ssl", sslContext.newHandler(ch.alloc()));
+            }
+            ch.pipeline().addLast("connection", new ConnectionChannelHandler(channel, publisher) {
+                @Override
+                public void channelInactive(final ChannelHandlerContext ctx) throws Exception {
+                    //卡在这了，为什么断开了？
+                    removeChannel(channel);
+                    super.channelInactive(ctx);
+                    logger.info(String.format("disconnect %s", ctx.channel().remoteAddress()));
+                }
+            });
+
+            if (adapter != null) {
+                ch.pipeline().addLast("adapter", new ProtocolAdapterDecoder(adapter, channel));
+            } else {
+                AdapterContext context = new ProtocolAdapterContext(channel, ch.pipeline());
+                context.bind(codec, chain);
+            }
+
+            ChannelTransport transport = function.apply(channel, url);
+            channel.setAttribute(Channel.CHANNEL_TRANSPORT, transport);
+            channel.setAttribute(Channel.SERVER_CHANNEL, getServerChannel());
+            addChannel(channel, transport);
+        }
+    }
+
 
 }

@@ -261,7 +261,7 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
      * @return 应答
      */
     protected TelnetResponse authenticate(final String interfaceId, final String password, final boolean isGlobal, final Channel channel) {
-        InetSocketAddress address = channel.getRemoteAddress();
+        InetSocketAddress address = (InetSocketAddress) channel.getRemoteAddress();
         String remoteIp = Ipv4.toIp(address);
         // 注册中心配的密码
         String token;

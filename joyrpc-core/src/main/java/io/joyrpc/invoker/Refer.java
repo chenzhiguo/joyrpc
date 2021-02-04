@@ -68,6 +68,7 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.net.SocketAddress;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -491,7 +492,7 @@ public class Refer extends AbstractService {
             return null;
         }
         Server server = local.getServer();
-        InetSocketAddress localAddress = server.getLocalAddress();
+        SocketAddress localAddress = server.getLocalAddress();
         request.setLocalAddress(localAddress);
         request.setRemoteAddress(localAddress);
         //构造会话
@@ -693,6 +694,7 @@ public class Refer extends AbstractService {
         return registry;
     }
 
+    @Override
     public InterfaceOption getOption() {
         return option;
     }

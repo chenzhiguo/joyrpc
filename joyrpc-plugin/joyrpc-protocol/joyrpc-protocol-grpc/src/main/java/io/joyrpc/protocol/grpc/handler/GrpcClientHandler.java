@@ -265,7 +265,7 @@ public class GrpcClientHandler implements ChannelHandler {
      */
     protected Http2Headers buildHeaders(final Invocation invocation, final Session session, final Channel channel) {
         //设置headers
-        final InetSocketAddress remoteAddress = channel.getRemoteAddress();
+        final InetSocketAddress remoteAddress = (InetSocketAddress) channel.getRemoteAddress();
         String authority = remoteAddress.getHostName() + ":" + remoteAddress.getPort();
         String path = "/" + invocation.getClassName() + "/" + invocation.getMethodName();
         //创建http2header对象

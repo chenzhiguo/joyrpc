@@ -36,6 +36,7 @@ import io.joyrpc.transport.transport.ChannelTransport;
 import io.joyrpc.util.SystemClock;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -72,12 +73,12 @@ public class RequestMessage<T> extends BaseMessage<T> implements Request {
     /**
      * The Local address.
      */
-    protected transient InetSocketAddress localAddress;
+    protected transient SocketAddress localAddress;
 
     /**
      * The Remote address.
      */
-    protected transient InetSocketAddress remoteAddress;
+    protected transient SocketAddress remoteAddress;
     /**
      * 通道
      */
@@ -194,14 +195,14 @@ public class RequestMessage<T> extends BaseMessage<T> implements Request {
     public static RequestMessage<Invocation> build(final MessageHeader header, final Invocation invocation,
                                                    final Channel channel, final Parametric http, final long receiveTime) {
         // 解析远程地址
-        InetSocketAddress remoteAddress = channel.getRemoteAddress();
+        SocketAddress remoteAddress = channel.getRemoteAddress();
         String remoteIp = http == null ? null : http.getString("X-Forwarded-For", "X-Real-IP", null);
         if (remoteIp != null) {
             // 可能是vip nginx等转发后的ip，多次转发用逗号分隔
             int pos = remoteIp.indexOf(',');
             remoteIp = pos > 0 ? remoteIp.substring(0, pos).trim() : remoteIp.trim();
             if (!remoteIp.isEmpty()) {
-                remoteAddress = InetSocketAddress.createUnresolved(remoteIp, channel.getRemoteAddress().getPort());
+                remoteAddress = InetSocketAddress.createUnresolved(remoteIp, ((InetSocketAddress)channel.getRemoteAddress()).getPort());
             }
         }
         RequestMessage<Invocation> result = build(header, invocation, channel.getLocalAddress(), remoteAddress);
@@ -220,8 +221,8 @@ public class RequestMessage<T> extends BaseMessage<T> implements Request {
      * @return 请求消息
      */
     public static RequestMessage<Invocation> build(final MessageHeader header, final Invocation invocation,
-                                                   final InetSocketAddress localAddress,
-                                                   final InetSocketAddress remoteAddress) {
+                                                   final SocketAddress localAddress,
+                                                   final SocketAddress remoteAddress) {
         RequestMessage<Invocation> request = new RequestMessage<>(header, invocation);
         request.createTime = SystemClock.now();
         request.localAddress = localAddress;
@@ -283,19 +284,19 @@ public class RequestMessage<T> extends BaseMessage<T> implements Request {
         this.thread = thread;
     }
 
-    public InetSocketAddress getLocalAddress() {
+    public SocketAddress getLocalAddress() {
         return localAddress;
     }
 
-    public void setLocalAddress(InetSocketAddress localAddress) {
+    public void setLocalAddress(SocketAddress localAddress) {
         this.localAddress = localAddress;
     }
 
-    public InetSocketAddress getRemoteAddress() {
+    public SocketAddress getRemoteAddress() {
         return remoteAddress;
     }
 
-    public void setRemoteAddress(InetSocketAddress remoteAddress) {
+    public void setRemoteAddress(SocketAddress remoteAddress) {
         this.remoteAddress = remoteAddress;
     }
 

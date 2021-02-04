@@ -40,9 +40,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 默认ChannelTransport实现
  */
-public class DefaultChannelTransport implements ChannelTransport {
+public class QuicChannelTransport implements ChannelTransport {
 
-    private static final Logger logger = LoggerFactory.getLogger(DefaultChannelTransport.class);
+    private static final Logger logger = LoggerFactory.getLogger(QuicChannelTransport.class);
     /**
      * URL
      */
@@ -68,12 +68,12 @@ public class DefaultChannelTransport implements ChannelTransport {
      */
     protected AtomicInteger requests = new AtomicInteger();
 
-    protected DefaultChannelTransport(URL url) {
+    protected QuicChannelTransport(URL url) {
         this.url = url;
         this.transportId = ID_GENERATOR.get();
     }
 
-    public DefaultChannelTransport(Channel channel, URL url) {
+    public QuicChannelTransport(Channel channel, URL url) {
         this.url = url;
         this.channel = channel;
         if (channel.isServer()) {

@@ -38,6 +38,7 @@ import io.joyrpc.util.network.Ipv4;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 
 import static io.joyrpc.Plugin.GENERIC_SERIALIZER;
@@ -85,8 +86,8 @@ public class GenericFilter extends AbstractProviderFilter {
             String message = String.format(ExceptionCode.format(ExceptionCode.FILTER_GENERIC_CONVERT) +
                             " Error occurs while processing request %s/%s/%s from channel %s->%s, caused by: %s",
                     invocation.getClassName(), invocation.getMethodName(), invocation.getAlias(),
-                    Ipv4.toIp(request.getRemoteAddress()),
-                    Ipv4.toIp(request.getLocalAddress()),
+                    Ipv4.toIp((InetSocketAddress) request.getRemoteAddress()),
+                    Ipv4.toIp((InetSocketAddress) request.getLocalAddress()),
                     e.getMessage());
             //转换出错
             logger.error(message, e);

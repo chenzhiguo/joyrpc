@@ -39,6 +39,8 @@ import io.joyrpc.transport.session.Session.RpcSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetSocketAddress;
+
 import static io.joyrpc.protocol.MsgType.AuthenticationResp;
 import static io.joyrpc.protocol.message.authentication.AuthenticationResponse.NOT_PASS;
 import static io.joyrpc.protocol.message.authentication.AuthenticationResponse.PASS;
@@ -71,7 +73,7 @@ public class AuthenticationReqHandler extends AbstractReqHandler implements Mess
         }
         AuthenticationRequest authReq = (AuthenticationRequest) request.getPayLoad();
         //查找exporter，获取其上绑定的认证
-        int port = channel.getLocalAddress().getPort();
+        int port = ((InetSocketAddress)channel.getLocalAddress()).getPort();
         String className = session.getInterfaceName();
         String alias = session.getAlias();
         Exporter exporter = ServiceManager.getExporter(className, alias, port);

@@ -29,6 +29,7 @@ import io.joyrpc.transport.transport.ChannelTransport;
 import io.joyrpc.util.SystemClock;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.List;
 import java.util.Map;
 
@@ -398,14 +399,14 @@ public interface Session {
          *
          * @return 远程地址
          */
-        InetSocketAddress getRemoteAddress();
+        SocketAddress getRemoteAddress();
 
         /**
          * 获取本地地址
          *
          * @return 本地地址
          */
-        InetSocketAddress getLocalAddress();
+        SocketAddress getLocalAddress();
 
         /**
          * 获取通道

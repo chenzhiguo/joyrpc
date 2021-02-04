@@ -45,6 +45,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Type;
+import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -212,7 +213,7 @@ public class BizReqHandler extends AbstractReqHandler implements MessageHandler 
             checkInterfaceId(invocation, className);
             //直接使用会话上的Exporter，加快性能
             if (exporter == null) {
-                exporter = ServiceManager.getExporter(invocation.getClassName(), invocation.getAlias(), channel.getLocalAddress().getPort());
+                exporter = ServiceManager.getExporter(invocation.getClassName(), invocation.getAlias(), ((InetSocketAddress)channel.getLocalAddress()).getPort());
                 if (exporter == null) {
                     //如果本地没有该服务，抛出ShutdownExecption，让消费者主动关闭连接
                     throw new ShutdownExecption(error(" exporter is not found"));

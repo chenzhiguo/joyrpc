@@ -26,6 +26,7 @@ import io.joyrpc.transport.session.SessionManager;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
+import java.net.SocketAddress;
 import java.util.function.Consumer;
 
 /**
@@ -50,12 +51,12 @@ public class DecoratorChannel implements Channel {
     }
 
     @Override
-    public InetSocketAddress getLocalAddress() {
+    public SocketAddress getLocalAddress() {
         return channel.getLocalAddress();
     }
 
     @Override
-    public InetSocketAddress getRemoteAddress() {
+    public SocketAddress getRemoteAddress() {
         return channel.getRemoteAddress();
     }
 

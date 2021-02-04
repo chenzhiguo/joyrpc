@@ -115,14 +115,14 @@ public interface Channel {
      *
      * @return 本地地址
      */
-    InetSocketAddress getLocalAddress();
+    SocketAddress getLocalAddress();
 
     /**
      * 获取远程地址
      *
      * @return 远端地址
      */
-    InetSocketAddress getRemoteAddress();
+    SocketAddress getRemoteAddress();
 
     /**
      * 是否可写

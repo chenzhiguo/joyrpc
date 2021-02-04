@@ -28,6 +28,7 @@ import io.joyrpc.transport.message.Message;
 import io.joyrpc.transport.session.Session;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.concurrent.*;
 import java.util.function.BiConsumer;
 
@@ -99,7 +100,7 @@ public interface ChannelTransport extends Transport {
      *
      * @return
      */
-    InetSocketAddress getRemoteAddress();
+    SocketAddress getRemoteAddress();
 
     /**
      * 获取最后发送请求成功的时间
